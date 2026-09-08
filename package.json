@@ -1,14 +1,22 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "name": "nativemonitortools",
+  "name": "native-monitor-tools",
   "private": true,
   "repository": {
     "type": "git",
     "url": "https://github.com/mynameistito/nativemonitortools"
   },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "type": "module",
-  "module": "index.ts",
   "scripts": {
+    "dev": "bun run --filter @native-monitor-tools/desktop dev",
+    "start": "bun run --filter @native-monitor-tools/desktop start",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "lint": "ultracite check",
     "check": "ultracite check",
     "fix": "ultracite fix",
     "prepare": "lefthook install"
