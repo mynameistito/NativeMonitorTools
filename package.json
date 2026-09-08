@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "nativemonitortools",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mynameistito/nativemonitortools"
+  },
+  "type": "module",
+  "module": "index.ts",
+  "scripts": {
+    "check": "ultracite check",
+    "fix": "ultracite fix",
+    "prepare": "lefthook install"
+  },
+  "devDependencies": {
+    "@effect/platform-bun": "4.0.0-rc.111",
+    "@effect/platform-node": "4.0.0-rc.111",
+    "@types/bun": "^1.4.2",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "effect": "4.0.0-rc.111",
+    "eslint-plugin-github": "6.1.2",
+    "eslint-plugin-sonarjs": "^4.2.0",
+    "lefthook": "^2.1.12",
+    "oxfmt": "^0.67.0",
+    "oxlint": "^1.82.0",
+    "oxlint-plugin-react-doctor": "^0.9.13",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "ultracite": "7.11.0",
+    "vitest": "^5.0.0"
+  }
+}
