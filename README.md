@@ -2,6 +2,10 @@
 
 Native Monitor Tools is a Bun workspace for a desktop runtime and shared code.
 
+## License and attribution
+
+Native Monitor Tools is licensed under the GNU General Public License version 3 (GPLv3) and incorporates GPLv3-compatible behavior and code from Dual Monitor Tools r555/2.13. See [`COPYING.txt`](COPYING.txt) and [`NOTICE.md`](NOTICE.md) for the full license and attribution details.
+
 ## Workspace layout
 
 - `apps/desktop` — the Bun desktop runtime entry point
