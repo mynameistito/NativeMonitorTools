@@ -14,6 +14,9 @@
   "scripts": {
     "dev": "bun run --filter @native-monitor-tools/desktop dev",
     "start": "bun run --filter @native-monitor-tools/desktop start",
+    "ui:dev": "bunx @native-sdk/cli dev apps/native-ui",
+    "ui:check": "bunx @native-sdk/cli check apps/native-ui",
+    "ui:test": "bunx @native-sdk/cli test apps/native-ui",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "lint": "ultracite check",

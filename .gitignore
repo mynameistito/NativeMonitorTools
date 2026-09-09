@@ -5,6 +5,9 @@ node_modules
 out
 dist
 *.tgz
+.native/
+zig-out/
+.zig-cache/
 
 # code coverage
 coverage
