@@ -65,6 +65,43 @@ export type {
   MonitorSelectorError,
   ResolveMonitorSelectorOptions,
 } from "./selector";
+export {
+  BRIGHTNESS_MAXIMUM,
+  BRIGHTNESS_MINIMUM,
+  clampBrightness,
+  clampContrast,
+  clampGamma,
+  CONTRAST_MINIMUM,
+  createDefaultGammaManagerSettings,
+  createGammaRamp,
+  DEFAULT_BRIGHTNESS,
+  DEFAULT_CONTRAST,
+  DEFAULT_GAMMA,
+  DEFAULT_GAMMA_MANAGER_SETTINGS,
+  DEFAULT_GAMMA_SETTINGS,
+  DEFAULT_MONITOR_BRIGHTNESS,
+  DEFAULT_MONITOR_CONTRAST,
+  EXTREME_CONTRAST_MAXIMUM,
+  GAMMA_MAXIMUM,
+  GAMMA_MINIMUM,
+  makeGammaManagerSettings,
+  NORMAL_CONTRAST_MAXIMUM,
+  parseGammaManagerIni,
+  resetGammaManagerSettings,
+  serializeGammaManagerIni,
+  setRgbAdjustment,
+} from "./color";
+export type {
+  ColorAdjustment,
+  GammaManagerIni,
+  GammaManagerSettings,
+  GammaManagerSettingsInput,
+  GammaRamp,
+  GammaRampOptions,
+  GammaRampParameters,
+  RgbChannel,
+  RgbControl,
+} from "./color";
 export { diffTopologies, diffTopology } from "./topology-diff";
 export type {
   MonitorChangeKind,
