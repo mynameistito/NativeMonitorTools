@@ -9,5 +9,10 @@
     "start": "bun run src/index.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@effect/platform-bun": "4.0.0-rc.111",
+    "@native-monitor-tools/core": "workspace:*",
+    "effect": "4.0.0-rc.111"
   }
 }
