@@ -32,6 +32,11 @@ bun run ui:check
 bun run ui:dev
 ```
 
+`ui:dev` first compiles the Bun/Effect backend to
+`dist/native-monitor-tools-backend.exe`, prepends that directory to `PATH`,
+and starts the Native SDK development host. The packaged Native SDK app needs
+the same backend executable discoverable beside it or on `PATH`.
+
 The Native SDK UI is a separate native-rendered app. It communicates with the Bun/Effect desktop backend through a versioned IPC boundary; it does not embed a JavaScript runtime or import backend services directly.
 
 Useful checks:
@@ -42,4 +47,6 @@ bun run lint
 bun run test
 ```
 
-The desktop runtime currently contains only the original Bun starter entry point; monitor features will be added through the shared core package.
+The desktop runtime owns the monitor adapter, profile storage, and versioned IPC
+host. The Native SDK UI reaches it through a generated service request; display
+mutation remains preview-only until the platform mutation port is implemented.

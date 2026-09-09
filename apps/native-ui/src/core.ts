@@ -1,5 +1,6 @@
 import { Cmd, asciiBytes, utf8Bytes } from "@native-sdk/core";
 import type { StatusItemState } from "@native-sdk/core/events";
+import { backendRequest } from "@native-sdk/services";
 
 export type Bytes = Uint8Array;
 export type Section =
@@ -19,7 +20,7 @@ export interface Capabilities {
 }
 
 export interface MonitorCard {
-  readonly id: number;
+  readonly id: Bytes;
   readonly name: Bytes;
   readonly resolution: Bytes;
   readonly position: Bytes;
@@ -29,7 +30,7 @@ export interface MonitorCard {
 }
 
 export interface ProfilePreview {
-  readonly id: number;
+  readonly id: Bytes;
   readonly name: Bytes;
   readonly summary: Bytes;
   readonly monitorCount: number;
@@ -41,7 +42,7 @@ export interface Model {
   readonly profileStatus: LoadStatus;
   readonly displays: readonly MonitorCard[];
   readonly profiles: readonly ProfilePreview[];
-  readonly selectedProfileId: number;
+  readonly selectedProfileId: Bytes;
   readonly previewReady: boolean;
   readonly previewName: Bytes;
   readonly previewSummary: Bytes;
@@ -61,8 +62,10 @@ export type Msg =
   | { readonly kind: "show_window_tools" }
   | { readonly kind: "show_settings" }
   | { readonly kind: "refresh" }
-  | { readonly kind: "select_profile"; readonly id: number }
+  | { readonly kind: "select_profile"; readonly id: Bytes }
   | { readonly kind: "apply_profile" }
+  | { readonly kind: "backend_completed"; readonly result: Bytes }
+  | { readonly kind: "backend_failed"; readonly reason: Bytes }
   | { readonly kind: "displays_loaded"; readonly payload: Bytes }
   | { readonly kind: "displays_failed"; readonly reason: Bytes }
   | { readonly kind: "profiles_loaded"; readonly payload: Bytes }
@@ -75,14 +78,16 @@ export type Msg =
 const IPC_PROTOCOL_VERSION = 1;
 const DISPLAY_FRAME_KIND = 1;
 const PROFILE_FRAME_KIND = 2;
+const APPLY_FRAME_KIND = 3;
+const ERROR_FRAME_KIND = 255;
 const MAX_IPC_ITEMS = 64;
 const EMPTY_BYTES = asciiBytes("");
 
 const NO_MODIFIERS = {
-  primary: false,
   command: false,
   control: false,
   option: false,
+  primary: false,
   shift: false,
 };
 
@@ -93,50 +98,62 @@ export const viewUnbound = [
   "profiles_failed",
   "profile_applied",
   "profile_apply_failed",
+  "backend_completed",
+  "backend_failed",
   "open_app",
   "quit_app",
 ] as const;
 
 export function initialModel(): Model {
   return {
-    section: "displays",
-    displayStatus: "empty",
-    profileStatus: "empty",
-    displays: [],
-    profiles: [],
-    selectedProfileId: -1,
-    previewReady: false,
-    previewName: EMPTY_BYTES,
-    previewSummary: EMPTY_BYTES,
-    previewMonitorCount: 0,
-    applyingProfile: false,
     applyStatus: "idle",
+    applyingProfile: false,
     capabilities: {
+      color: false,
       displays: false,
       profiles: false,
-      color: false,
       windowTools: false,
     },
+    displayStatus: "empty",
+    displays: [],
     ipcState: "disconnected",
-    protocolVersion: 1,
     lastError: EMPTY_BYTES,
+    previewMonitorCount: 0,
+    previewName: EMPTY_BYTES,
+    previewReady: false,
+    previewSummary: EMPTY_BYTES,
+    profileStatus: "empty",
+    profiles: [],
+    protocolVersion: 1,
+    section: "displays",
+    selectedProfileId: EMPTY_BYTES,
   };
 }
 
 export function commandMsg(name: string): Msg | null {
-  if (name === "app.open") return { kind: "open_app" };
-  if (name === "app.refresh") return { kind: "refresh" };
-  if (name === "app.quit") return { kind: "quit_app" };
+  if (name === "app.open") {
+    return { kind: "open_app" };
+  }
+  if (name === "app.refresh") {
+    return { kind: "refresh" };
+  }
+  if (name === "app.quit") {
+    return { kind: "quit_app" };
+  }
   return null;
 }
 
 export function applyLabel(model: Model): Bytes {
-  if (model.applyingProfile) return utf8Bytes("Applying…");
-  return asciiBytes("Apply profile");
+  if (model.applyingProfile) {
+    return utf8Bytes("Previewing…");
+  }
+  return asciiBytes("Preview profile");
 }
 
 export function statusText(model: Model): Bytes {
-  if (model.ipcState === "failed") return model.lastError;
+  if (model.ipcState === "failed") {
+    return model.lastError;
+  }
   return asciiBytes("Commands are versioned and capability-aware");
 }
 
@@ -146,7 +163,9 @@ interface ReadBytes {
 }
 
 function toWhole(value: number): number {
-  if (value >= 0) return Math.trunc(value);
+  if (value >= 0) {
+    return Math.trunc(value);
+  }
   return 0;
 }
 
@@ -154,31 +173,27 @@ function readU16(bytes: Bytes, offset: number): number {
   return toWhole((bytes[offset] ?? 0) + (bytes[offset + 1] ?? 0) * 256);
 }
 
-function readU32(bytes: Bytes, offset: number): number {
-  return toWhole(
-    (bytes[offset] ?? 0) +
-      (bytes[offset + 1] ?? 0) * 256 +
-      (bytes[offset + 2] ?? 0) * 65536 +
-      (bytes[offset + 3] ?? 0) * 16777216
-  );
-}
-
-function encodeProfileRequest(id: number): Bytes {
+function encodeBackendRequest(kind: number, name: Bytes): Bytes {
   return new Uint8Array([
-    id & 255,
-    (id >>> 8) & 255,
-    (id >>> 16) & 255,
-    (id >>> 24) & 255,
+    IPC_PROTOCOL_VERSION,
+    kind,
+    name.length & 255,
+    (name.length >>> 8) & 255,
+    ...name,
   ]);
 }
 
 function readBytes(bytes: Bytes, offset: number): ReadBytes | null {
-  if (offset + 2 > bytes.length) return null;
+  if (offset + 2 > bytes.length) {
+    return null;
+  }
   const length = readU16(bytes, offset);
   const start = offset + 2;
   const end = start + length;
-  if (end > bytes.length) return null;
-  return { value: bytes.slice(start, end), next: end };
+  if (end > bytes.length) {
+    return null;
+  }
+  return { next: end, value: bytes.slice(start, end) };
 }
 
 function decodeDisplayFrame(payload: Bytes): readonly MonitorCard[] | null {
@@ -186,42 +201,53 @@ function decodeDisplayFrame(payload: Bytes): readonly MonitorCard[] | null {
     payload.length < 4 ||
     payload[0] !== IPC_PROTOCOL_VERSION ||
     payload[1] !== DISPLAY_FRAME_KIND
-  )
+  ) {
     return null;
+  }
   const count = readU16(payload, 2);
-  if (count > MAX_IPC_ITEMS) return null;
+  if (count > MAX_IPC_ITEMS) {
+    return null;
+  }
   let offset = 4;
   const displays: MonitorCard[] = [];
   for (let index = 0; index < count; index += 1) {
-    if (offset + 6 > payload.length) return null;
-    const id = readU32(payload, offset);
-    if (!(id >= 0 && id <= 0xffffffff)) return null;
-    const monitorId = Math.trunc(id);
-    const primary = (payload[offset + 4] ?? 0) === 1;
-    offset += 5;
+    const id = readBytes(payload, offset);
+    if (id === null || id.next + 1 > payload.length) {
+      return null;
+    }
+    const primary = (payload[id.next] ?? 0) === 1;
+    offset = id.next + 1;
     const name = readBytes(payload, offset);
-    if (name === null) return null;
+    if (name === null) {
+      return null;
+    }
     offset = name.next;
     const resolution = readBytes(payload, offset);
-    if (resolution === null) return null;
+    if (resolution === null) {
+      return null;
+    }
     offset = resolution.next;
     const position = readBytes(payload, offset);
-    if (position === null || position.next + 2 > payload.length) return null;
+    if (position === null || position.next + 2 > payload.length) {
+      return null;
+    }
     offset = position.next;
     const colorSupported = (payload[offset] ?? 0) === 1;
     const windowToolsSupported = (payload[offset + 1] ?? 0) === 1;
     offset += 2;
     displays.push({
-      id: monitorId,
+      colorSupported,
+      id: id.value,
       name: name.value,
-      resolution: resolution.value,
       position: position.value,
       primary,
-      colorSupported,
+      resolution: resolution.value,
       windowToolsSupported,
     });
   }
-  if (offset !== payload.length) return null;
+  if (offset !== payload.length) {
+    return null;
+  }
   return displays;
 }
 
@@ -230,60 +256,108 @@ function decodeProfileFrame(payload: Bytes): readonly ProfilePreview[] | null {
     payload.length < 4 ||
     payload[0] !== IPC_PROTOCOL_VERSION ||
     payload[1] !== PROFILE_FRAME_KIND
-  )
+  ) {
     return null;
+  }
   const count = readU16(payload, 2);
-  if (count > MAX_IPC_ITEMS) return null;
+  if (count > MAX_IPC_ITEMS) {
+    return null;
+  }
   let offset = 4;
   const profiles: ProfilePreview[] = [];
   for (let index = 0; index < count; index += 1) {
-    if (offset + 4 > payload.length) return null;
-    const id = readU32(payload, offset);
-    if (!(id >= 0 && id <= 0xffffffff)) return null;
-    const profileId = Math.trunc(id);
-    offset += 4;
+    const id = readBytes(payload, offset);
+    if (id === null) {
+      return null;
+    }
+    offset = id.next;
     const name = readBytes(payload, offset);
-    if (name === null) return null;
+    if (name === null) {
+      return null;
+    }
     offset = name.next;
     const summary = readBytes(payload, offset);
-    if (summary === null || summary.next + 2 > payload.length) return null;
+    if (summary === null || summary.next + 2 > payload.length) {
+      return null;
+    }
     offset = summary.next;
     const monitorCount = readU16(payload, offset);
-    if (!(monitorCount >= 0)) return null;
-    if (monitorCount > 64) return null;
+    if (!(monitorCount >= 0)) {
+      return null;
+    }
+    if (monitorCount > 64) {
+      return null;
+    }
     const wholeMonitorCount = Math.trunc(monitorCount);
     offset += 2;
     profiles.push({
-      id: profileId,
+      id: id.value,
+      monitorCount: wholeMonitorCount,
       name: name.value,
       summary: summary.value,
-      monitorCount: wholeMonitorCount,
     });
   }
-  if (offset !== payload.length) return null;
+  if (offset !== payload.length) {
+    return null;
+  }
   return profiles;
+}
+
+interface ErrorFrame {
+  readonly operation: number;
+  readonly reason: Bytes;
+}
+
+function decodeErrorFrame(payload: Bytes): ErrorFrame | null {
+  if (
+    payload.length < 5 ||
+    payload[0] !== IPC_PROTOCOL_VERSION ||
+    payload[1] !== ERROR_FRAME_KIND
+  ) {
+    return null;
+  }
+  const reason = readBytes(payload, 3);
+  if (reason === null || reason.next !== payload.length) {
+    return null;
+  }
+  return { operation: payload[2] ?? 0, reason: reason.value };
 }
 
 function hasColorSupport(displays: readonly MonitorCard[]): boolean {
   for (const display of displays) {
-    if (display.colorSupported) return true;
+    if (display.colorSupported) {
+      return true;
+    }
   }
   return false;
 }
 
 function hasWindowToolsSupport(displays: readonly MonitorCard[]): boolean {
   for (const display of displays) {
-    if (display.windowToolsSupported) return true;
+    if (display.windowToolsSupported) {
+      return true;
+    }
   }
   return false;
 }
 
 function findProfile(
   profiles: readonly ProfilePreview[],
-  id: number
+  id: Bytes
 ): ProfilePreview | null {
   for (const profile of profiles) {
-    if (profile.id === id) return profile;
+    if (profile.id.length !== id.length) {
+      continue;
+    }
+    let equal = true;
+    for (let index = 0; index < id.length; index += 1) {
+      if (profile.id[index] !== id[index]) {
+        equal = false;
+      }
+    }
+    if (equal) {
+      return profile;
+    }
   }
   return null;
 }
@@ -292,36 +366,41 @@ function withPreview(model: Model, profile: ProfilePreview | null): Model {
   if (profile === null) {
     return {
       ...model,
-      selectedProfileId: -1,
-      previewReady: false,
-      previewName: EMPTY_BYTES,
-      previewSummary: EMPTY_BYTES,
       previewMonitorCount: 0,
+      previewName: EMPTY_BYTES,
+      previewReady: false,
+      previewSummary: EMPTY_BYTES,
+      selectedProfileId: EMPTY_BYTES,
     };
   }
   return {
     ...model,
-    selectedProfileId: profile.id,
-    previewReady: true,
-    previewName: profile.name,
-    previewSummary: profile.summary,
     previewMonitorCount: profile.monitorCount,
+    previewName: profile.name,
+    previewReady: true,
+    previewSummary: profile.summary,
+    selectedProfileId: profile.id,
   };
 }
 
 export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
   switch (msg.kind) {
-    case "show_displays":
+    case "show_displays": {
       return { ...model, section: "displays" };
-    case "show_profiles":
+    }
+    case "show_profiles": {
       return { ...model, section: "profiles" };
-    case "show_color":
+    }
+    case "show_color": {
       return { ...model, section: "color" };
-    case "show_window_tools":
+    }
+    case "show_window_tools": {
       return { ...model, section: "window_tools" };
-    case "show_settings":
+    }
+    case "show_settings": {
       return { ...model, section: "settings" };
-    case "refresh":
+    }
+    case "refresh": {
       return [
         {
           ...model,
@@ -331,22 +410,25 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
           lastError: EMPTY_BYTES,
         },
         Cmd.batch([
-          Cmd.request("monitor-tools.ipc.v1.displays.list", new Uint8Array(0), {
+          backendRequest(encodeBackendRequest(1, EMPTY_BYTES), {
             key: "ipc.displays",
-            ok: "displays_loaded",
-            err: "displays_failed",
+            ok: "backend_completed",
+            err: "backend_failed",
           }),
-          Cmd.request("monitor-tools.ipc.v1.profiles.list", new Uint8Array(0), {
+          backendRequest(encodeBackendRequest(2, EMPTY_BYTES), {
             key: "ipc.profiles",
-            ok: "profiles_loaded",
-            err: "profiles_failed",
+            ok: "backend_completed",
+            err: "backend_failed",
           }),
         ]),
       ];
-    case "select_profile":
+    }
+    case "select_profile": {
       return withPreview(model, findProfile(model.profiles, msg.id));
-    case "apply_profile":
-      if (model.selectedProfileId < 0 || model.applyingProfile) return model;
+    }
+    case "apply_profile": {
+      if (model.selectedProfileId.length === 0 || model.applyingProfile)
+        return model;
       return [
         {
           ...model,
@@ -354,16 +436,69 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
           applyStatus: "loading",
           lastError: EMPTY_BYTES,
         },
-        Cmd.request(
-          "monitor-tools.ipc.v1.profiles.apply",
-          encodeProfileRequest(model.selectedProfileId),
-          {
-            key: "ipc.profiles.apply",
-            ok: "profile_applied",
-            err: "profile_apply_failed",
-          }
-        ),
+        backendRequest(encodeBackendRequest(3, model.selectedProfileId), {
+          key: "ipc.profiles.apply",
+          ok: "backend_completed",
+          err: "backend_failed",
+        }),
       ];
+    }
+    case "backend_completed": {
+      const failure = decodeErrorFrame(msg.result);
+      if (failure !== null) {
+        if (failure.operation === 1) {
+          return update(model, {
+            kind: "displays_failed",
+            reason: failure.reason,
+          });
+        }
+        if (failure.operation === 2) {
+          return update(model, {
+            kind: "profiles_failed",
+            reason: failure.reason,
+          });
+        }
+        if (failure.operation === 3) {
+          return update(model, {
+            kind: "profile_apply_failed",
+            reason: failure.reason,
+          });
+        }
+      }
+      const displays = decodeDisplayFrame(msg.result);
+      if (displays !== null) {
+        return update(model, { kind: "displays_loaded", payload: msg.result });
+      }
+      const profiles = decodeProfileFrame(msg.result);
+      if (profiles !== null) {
+        return update(model, { kind: "profiles_loaded", payload: msg.result });
+      }
+      if (
+        msg.result.length === 4 &&
+        msg.result[0] === IPC_PROTOCOL_VERSION &&
+        msg.result[1] === APPLY_FRAME_KIND
+      ) {
+        return update(model, { kind: "profile_applied", payload: msg.result });
+      }
+      return {
+        ...model,
+        applyStatus: "failed",
+        displayStatus: "failed",
+        ipcState: "failed",
+        lastError: asciiBytes("The backend returned an invalid IPC v1 frame."),
+        profileStatus: "failed",
+      };
+    }
+    case "backend_failed": {
+      return {
+        ...model,
+        displayStatus: "failed",
+        profileStatus: "failed",
+        applyStatus: "failed",
+        ipcState: "failed",
+        lastError: msg.reason,
+      };
+    }
     case "displays_loaded": {
       const displays = decodeDisplayFrame(msg.payload);
       if (displays === null) {
@@ -378,23 +513,23 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
       }
       return {
         ...model,
-        displays,
-        displayStatus: displays.length === 0 ? "empty" : "ready",
-        ipcState: "ready",
-        lastError: EMPTY_BYTES,
         capabilities: {
           ...model.capabilities,
-          displays: true,
           color: hasColorSupport(displays),
+          displays: true,
           windowTools: hasWindowToolsSupport(displays),
         },
+        displayStatus: displays.length === 0 ? "empty" : "ready",
+        displays,
+        ipcState: "ready",
+        lastError: EMPTY_BYTES,
       };
     }
-    case "displays_failed":
+    case "displays_failed": {
       return {
         ...model,
-          displayStatus: "failed",
-          ipcState: "failed",
+        displayStatus: "failed",
+        ipcState: "failed",
         lastError: msg.reason,
         capabilities: {
           ...model.capabilities,
@@ -403,54 +538,60 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
           windowTools: false,
         },
       };
+    }
     case "profiles_loaded": {
       const profiles = decodeProfileFrame(msg.payload);
       if (profiles === null) {
         return {
           ...model,
-            profileStatus: "failed",
-            ipcState: "failed",
+          ipcState: "failed",
           lastError: asciiBytes(
             "The profile response was not a valid IPC v1 frame."
           ),
+          profileStatus: "failed",
         };
       }
       const first = profiles.length > 0 ? (profiles[0] ?? null) : null;
       return {
         ...withPreview({ ...model, profiles }, first),
-        profileStatus: profiles.length === 0 ? "empty" : "ready",
+        capabilities: { ...model.capabilities, profiles: true },
         ipcState: "ready",
         lastError: EMPTY_BYTES,
-        capabilities: { ...model.capabilities, profiles: true },
+        profileStatus: profiles.length === 0 ? "empty" : "ready",
       };
     }
-    case "profiles_failed":
+    case "profiles_failed": {
       return {
         ...model,
-          profileStatus: "failed",
-          ipcState: "failed",
+        profileStatus: "failed",
+        ipcState: "failed",
         lastError: msg.reason,
         capabilities: { ...model.capabilities, profiles: false },
       };
-    case "profile_applied":
+    }
+    case "profile_applied": {
       return {
         ...model,
         applyingProfile: false,
         applyStatus: "ready",
         lastError: EMPTY_BYTES,
       };
-    case "profile_apply_failed":
+    }
+    case "profile_apply_failed": {
       return {
         ...model,
         applyingProfile: false,
-          applyStatus: "failed",
-          ipcState: "failed",
+        applyStatus: "failed",
+        ipcState: "failed",
         lastError: msg.reason,
       };
-    case "open_app":
+    }
+    case "open_app": {
       return model;
-    case "quit_app":
+    }
+    case "quit_app": {
       return [model, Cmd.quitApp()];
+    }
   }
 }
 
@@ -458,20 +599,9 @@ export function statusItem(model: Model): StatusItemState {
   const title =
     model.ipcState === "ready" ? asciiBytes("READY") : asciiBytes("MONITORS");
   return {
-    iconPath: EMPTY_BYTES,
-    tooltip: asciiBytes("Native Monitor Tools"),
     activationCommand: asciiBytes("app.open"),
     alternateActivationCommand: EMPTY_BYTES,
-    openCommand: asciiBytes("app.open"),
-    presentation: {
-      title,
-      width: 72,
-      tone: model.ipcState === "failed" ? "warning" : "normal",
-      iconOpacity: 1,
-      monospaced: true,
-      fontSize: 12,
-      fontWeight: "semibold",
-    },
+    iconPath: EMPTY_BYTES,
     items: [
       {
         id: 1,
@@ -518,5 +648,16 @@ export function statusItem(model: Model): StatusItemState {
         modifiers: NO_MODIFIERS,
       },
     ],
+    openCommand: asciiBytes("app.open"),
+    presentation: {
+      fontSize: 12,
+      fontWeight: "semibold",
+      iconOpacity: 1,
+      monospaced: true,
+      title,
+      tone: model.ipcState === "failed" ? "warning" : "normal",
+      width: 72,
+    },
+    tooltip: asciiBytes("Native Monitor Tools"),
   };
 }

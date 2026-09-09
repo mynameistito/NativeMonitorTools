@@ -14,7 +14,8 @@
   "scripts": {
     "dev": "bun run --filter @native-monitor-tools/desktop dev",
     "start": "bun run --filter @native-monitor-tools/desktop start",
-    "ui:dev": "bunx @native-sdk/cli dev apps/native-ui",
+    "backend:build": "bun build --compile apps/desktop/src/index.ts --outfile dist/native-monitor-tools-backend.exe",
+    "ui:dev": "bun run scripts/native-ui-dev.ts",
     "ui:check": "bunx @native-sdk/cli check apps/native-ui",
     "ui:test": "bunx @native-sdk/cli test apps/native-ui",
     "typecheck": "tsc --noEmit -p tsconfig.json",

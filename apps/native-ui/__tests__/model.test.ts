@@ -1,7 +1,9 @@
 import { initialModel, update } from "../src/core.ts";
 
 const assert = (condition: boolean, message: string): void => {
-  if (!condition) throw new Error(message);
+  if (!condition) {
+    throw new Error(message);
+  }
 };
 
 const emptyDisplayFrame = new Uint8Array([1, 1, 0, 0]);

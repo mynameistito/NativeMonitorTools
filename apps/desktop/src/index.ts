@@ -5,6 +5,7 @@ import { makeDesktopApplicationLayer } from "./application/composition";
 import { DesktopApplication } from "./application/service";
 import { parseCliArgs } from "./cli/parser";
 import { renderCliError, renderCliResult } from "./cli/renderer";
+import { decodeNativeUiArgument, runNativeUiRequest } from "./native-ui-host";
 import {
   parseDesktopPlatform,
   resolveDesktopPaths,
@@ -18,6 +19,15 @@ const command = Effect.gen(function* commandEffect() {
 });
 
 const run = async (): Promise<void> => {
+  if (process.argv.includes("--native-ui")) {
+    const [encoded] = process.argv.slice(3);
+    const input =
+      encoded === undefined
+        ? new Uint8Array(await new Response(Bun.stdin.stream()).arrayBuffer())
+        : (decodeNativeUiArgument(encoded) ?? new Uint8Array(0));
+    process.stdout.write(await runNativeUiRequest(input));
+    return;
+  }
   const paths = resolveDesktopPaths(
     process.env,
     parseDesktopPlatform(process.platform),

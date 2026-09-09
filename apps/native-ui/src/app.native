@@ -147,12 +147,12 @@
                       <badge variant="secondary">{previewMonitorCount} monitors</badge>
                     </row>
                     <separator />
-                    <text size="sm" foreground="text_muted" wrap="true">Applying a profile sends the selected id to the IPC backend. The backend owns validation and the native display change.</text>
+                    <text size="sm" foreground="text_muted" wrap="true">Previewing a profile sends its stable name to the IPC backend. The backend owns validation; display mutation is not enabled until the native mode port is complete.</text>
                     <row gap="8" main="end">
-                      <button variant="primary" disabled="{applyingProfile or selectedProfileId < 0}" on-press="apply_profile">{applyLabel}</button>
+                      <button variant="primary" disabled="{applyingProfile or selectedProfileId.length == 0}" on-press="apply_profile">{applyLabel}</button>
                     </row>
                     <if test="{applyStatus == 'ready'}">
-                      <badge variant="success">Profile applied</badge>
+                      <badge variant="success">Profile preview ready</badge>
                     </if>
                     <if test="{applyStatus == 'failed'}">
                       <text size="sm" foreground="destructive">{lastError}</text>

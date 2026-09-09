@@ -9,7 +9,7 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "lib": ["esnext"],
-    "types": [],
+    "types": ["bun"],
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "exactOptionalPropertyTypes": true,
