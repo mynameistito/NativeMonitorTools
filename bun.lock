@@ -23,6 +23,13 @@
     },
     "apps/desktop": {
       "name": "@native-monitor-tools/desktop",
+      "dependencies": {
+        "@native-monitor-tools/core": "workspace:*",
+        "effect": "4.0.0-rc.111",
+      },
+      "devDependencies": {
+        "bun-types": "1.4.2",
+      },
     },
     "apps/site": {
       "name": "@native-monitor-tools/site",

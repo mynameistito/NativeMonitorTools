@@ -11,6 +11,9 @@
 
     // Bundler mode
     "moduleResolution": "bundler",
+    "paths": {
+      "@native-monitor-tools/core": ["./packages/core/src/index.ts"]
+    },
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
