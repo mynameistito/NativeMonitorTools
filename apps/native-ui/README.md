@@ -15,10 +15,22 @@ The decoder is deliberately isolated in `src/core.ts`. The service launches `nat
 
 ## Commands
 
+Run these from the repository root:
+
 ```sh
-native dev --core
-native check
-native test
+bun run ui:dev
+bun run ui:check
+bun run ui:test
 ```
 
-The Native SDK CLI materializes and refreshes `node_modules/@native-sdk/core` for editor support and validation. It is not part of the shipped binary.
+The repository wrappers use the pinned `@native-sdk/cli@0.10.1` and
+materialize `node_modules/@native-sdk/core` for editor support and validation.
+On Windows they prepend the tracked `scripts/native-sdk-windows/include`
+directory to `C_INCLUDE_PATH`; its minimal `sys/types.h` supplies the Windows
+`ssize_t` typedef missing from `scr_runtime.h`. The root pins
+`@scriptc/runtime@0.0.36`, but the CLI's `scriptc`/`@scriptc/compiler`
+dependency remains pinned at `0.0.35`; the installed runtime-source override was
+tested and did not compile with that bundled compiler. An explicit
+`SCRIPTC_TEST_RUNTIME_SRC_DIR` is preserved. The compatibility shim does not
+patch `%TEMP%` or change global `SCRIPTC_CC`/`zigcc` settings.
+The CLI is not part of the shipped binary.

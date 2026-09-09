@@ -1,0 +1,9 @@
+#ifndef NATIVE_MONITOR_TOOLS_WINDOWS_SYS_TYPES_H
+#define NATIVE_MONITOR_TOOLS_WINDOWS_SYS_TYPES_H
+
+#ifndef _SSIZE_T_DEFINED
+typedef __INTPTR_TYPE__ ssize_t;
+#define _SSIZE_T_DEFINED
+#endif
+
+#endif
