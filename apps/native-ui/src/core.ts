@@ -8,8 +8,8 @@ export type Section =
   | "color"
   | "window_tools"
   | "settings";
-export type LoadStatus = "idle" | "loading" | "ready" | "empty" | "error";
-export type IpcState = "disconnected" | "connecting" | "ready" | "error";
+export type LoadStatus = "idle" | "loading" | "ready" | "empty" | "failed";
+export type IpcState = "disconnected" | "connecting" | "ready" | "failed";
 
 export interface Capabilities {
   readonly displays: boolean;
@@ -118,7 +118,7 @@ export function initialModel(): Model {
       windowTools: false,
     },
     ipcState: "disconnected",
-    protocolVersion: IPC_PROTOCOL_VERSION,
+    protocolVersion: 1,
     lastError: EMPTY_BYTES,
   };
 }
@@ -136,7 +136,7 @@ export function applyLabel(model: Model): Bytes {
 }
 
 export function statusText(model: Model): Bytes {
-  if (model.ipcState === "error") return model.lastError;
+  if (model.ipcState === "failed") return model.lastError;
   return asciiBytes("Commands are versioned and capability-aware");
 }
 
@@ -145,17 +145,31 @@ interface ReadBytes {
   readonly next: number;
 }
 
+function toWhole(value: number): number {
+  if (value >= 0) return Math.trunc(value);
+  return 0;
+}
+
 function readU16(bytes: Bytes, offset: number): number {
-  return (bytes[offset] ?? 0) + (bytes[offset + 1] ?? 0) * 256;
+  return toWhole((bytes[offset] ?? 0) + (bytes[offset + 1] ?? 0) * 256);
 }
 
 function readU32(bytes: Bytes, offset: number): number {
-  return (
+  return toWhole(
     (bytes[offset] ?? 0) +
-    (bytes[offset + 1] ?? 0) * 256 +
-    (bytes[offset + 2] ?? 0) * 65536 +
-    (bytes[offset + 3] ?? 0) * 16777216
+      (bytes[offset + 1] ?? 0) * 256 +
+      (bytes[offset + 2] ?? 0) * 65536 +
+      (bytes[offset + 3] ?? 0) * 16777216
   );
+}
+
+function encodeProfileRequest(id: number): Bytes {
+  return new Uint8Array([
+    id & 255,
+    (id >>> 8) & 255,
+    (id >>> 16) & 255,
+    (id >>> 24) & 255,
+  ]);
 }
 
 function readBytes(bytes: Bytes, offset: number): ReadBytes | null {
@@ -181,6 +195,8 @@ function decodeDisplayFrame(payload: Bytes): readonly MonitorCard[] | null {
   for (let index = 0; index < count; index += 1) {
     if (offset + 6 > payload.length) return null;
     const id = readU32(payload, offset);
+    if (!(id >= 0 && id <= 0xffffffff)) return null;
+    const monitorId = Math.trunc(id);
     const primary = (payload[offset + 4] ?? 0) === 1;
     offset += 5;
     const name = readBytes(payload, offset);
@@ -196,7 +212,7 @@ function decodeDisplayFrame(payload: Bytes): readonly MonitorCard[] | null {
     const windowToolsSupported = (payload[offset + 1] ?? 0) === 1;
     offset += 2;
     displays.push({
-      id,
+      id: monitorId,
       name: name.value,
       resolution: resolution.value,
       position: position.value,
@@ -223,6 +239,8 @@ function decodeProfileFrame(payload: Bytes): readonly ProfilePreview[] | null {
   for (let index = 0; index < count; index += 1) {
     if (offset + 4 > payload.length) return null;
     const id = readU32(payload, offset);
+    if (!(id >= 0 && id <= 0xffffffff)) return null;
+    const profileId = Math.trunc(id);
     offset += 4;
     const name = readBytes(payload, offset);
     if (name === null) return null;
@@ -231,12 +249,15 @@ function decodeProfileFrame(payload: Bytes): readonly ProfilePreview[] | null {
     if (summary === null || summary.next + 2 > payload.length) return null;
     offset = summary.next;
     const monitorCount = readU16(payload, offset);
+    if (!(monitorCount >= 0)) return null;
+    if (monitorCount > 64) return null;
+    const wholeMonitorCount = Math.trunc(monitorCount);
     offset += 2;
     profiles.push({
-      id,
+      id: profileId,
       name: name.value,
       summary: summary.value,
-      monitorCount,
+      monitorCount: wholeMonitorCount,
     });
   }
   if (offset !== payload.length) return null;
@@ -335,7 +356,7 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
         },
         Cmd.request(
           "monitor-tools.ipc.v1.profiles.apply",
-          { profileId: model.selectedProfileId },
+          encodeProfileRequest(model.selectedProfileId),
           {
             key: "ipc.profiles.apply",
             ok: "profile_applied",
@@ -348,8 +369,8 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
       if (displays === null) {
         return {
           ...model,
-          displayStatus: "error",
-          ipcState: "error",
+          displayStatus: "failed",
+          ipcState: "failed",
           lastError: asciiBytes(
             "The display response was not a valid IPC v1 frame."
           ),
@@ -372,8 +393,8 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
     case "displays_failed":
       return {
         ...model,
-        displayStatus: "error",
-        ipcState: "error",
+          displayStatus: "failed",
+          ipcState: "failed",
         lastError: msg.reason,
         capabilities: {
           ...model.capabilities,
@@ -387,8 +408,8 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
       if (profiles === null) {
         return {
           ...model,
-          profileStatus: "error",
-          ipcState: "error",
+            profileStatus: "failed",
+            ipcState: "failed",
           lastError: asciiBytes(
             "The profile response was not a valid IPC v1 frame."
           ),
@@ -406,8 +427,8 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
     case "profiles_failed":
       return {
         ...model,
-        profileStatus: "error",
-        ipcState: "error",
+          profileStatus: "failed",
+          ipcState: "failed",
         lastError: msg.reason,
         capabilities: { ...model.capabilities, profiles: false },
       };
@@ -422,8 +443,8 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
       return {
         ...model,
         applyingProfile: false,
-        applyStatus: "error",
-        ipcState: "error",
+          applyStatus: "failed",
+          ipcState: "failed",
         lastError: msg.reason,
       };
     case "open_app":
@@ -445,7 +466,7 @@ export function statusItem(model: Model): StatusItemState {
     presentation: {
       title,
       width: 72,
-      tone: model.ipcState === "error" ? "warning" : "normal",
+      tone: model.ipcState === "failed" ? "warning" : "normal",
       iconOpacity: 1,
       monospaced: true,
       fontSize: 12,

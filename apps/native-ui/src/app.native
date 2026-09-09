@@ -5,7 +5,7 @@
       <text size="sm" foreground="text_muted">A native shell for displays, profiles, color, and window tools</text>
     </column>
     <spacer grow="1" />
-    <if test="{ipcState == 'error'}">
+    <if test="{ipcState == 'failed'}">
       <badge variant="destructive">IPC error</badge>
     </if>
     <if test="{ipcState == 'ready'}">
@@ -43,7 +43,7 @@
               </column>
             </panel>
           </if>
-          <if test="{displayStatus == 'error'}">
+          <if test="{displayStatus == 'failed'}">
             <panel padding="24" background="surface" radius="lg" border-color="destructive" label="Display error">
               <column gap="8">
                 <text><span weight="bold">Display discovery failed</span></text>
@@ -110,7 +110,7 @@
               </column>
             </panel>
           </if>
-          <if test="{profileStatus == 'error'}">
+          <if test="{profileStatus == 'failed'}">
             <panel padding="24" background="surface" radius="lg" border-color="destructive" label="Profile error">
               <column gap="8">
                 <text><span weight="bold">Profiles unavailable</span></text>
@@ -154,7 +154,7 @@
                     <if test="{applyStatus == 'ready'}">
                       <badge variant="success">Profile applied</badge>
                     </if>
-                    <if test="{applyStatus == 'error'}">
+                    <if test="{applyStatus == 'failed'}">
                       <text size="sm" foreground="destructive">{lastError}</text>
                     </if>
                   </column>

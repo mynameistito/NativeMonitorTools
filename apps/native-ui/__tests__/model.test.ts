@@ -64,10 +64,10 @@ const failureResult = update(initial, {
 });
 const failure = Array.isArray(failureResult) ? failureResult[0] : failureResult;
 assert(
-  failure.displayStatus === "error",
+  failure.displayStatus === "failed",
   "IPC failure should produce an error state"
 );
 assert(
-  failure.ipcState === "error",
+  failure.ipcState === "failed",
   "IPC failure should be visible in global state"
 );

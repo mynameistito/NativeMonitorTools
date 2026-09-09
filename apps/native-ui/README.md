@@ -17,7 +17,7 @@ The temporary response adapter uses bounded binary frames:
   `position`, followed by `colorSupported:u8` and `windowToolsSupported:u8`;
 - profile list: `[version:u8, kind:2, count:u16]`, then each profile's
   `id:u32`, length-prefixed UTF-8 `name` and `summary`, and `monitorCount:u16`;
-- profile apply requests use the SDK host-record payload `{ profileId }`.
+- profile apply requests use a four-byte little-endian `profileId` payload.
 
 This decoder is deliberately isolated in `src/core.ts`; replace it with the
 shared versioned IPC codec when that backend contract is available.
