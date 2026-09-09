@@ -53,3 +53,65 @@ export type {
   WindowsPlatformOperation,
   WindowsPlatformResult,
 } from "./platform/windows";
+
+export {
+  makeNativeUiApplicationLayer,
+  makeNativeUiApplication,
+  makeProductionNativeUiApplication,
+  NativeUiAdapterError,
+  NativeUiApplication,
+} from "./application";
+export type {
+  NativeUiApplicationApi,
+  NativeUiApplicationDependencies,
+  NativeUiApplicationError,
+  NativeUiCapability,
+  NativeUiCapabilityName,
+  NativeUiCapabilitySnapshot,
+  NativeUiSavedProfile,
+} from "./application";
+export { NativeUiIpcClient } from "./ipc/client";
+export { NativeUiIpcClientError } from "./ipc/client-error";
+export type { IpcClientOptions } from "./ipc/client";
+export {
+  encodeIpcRequest,
+  encodeIpcResponse,
+  IpcProtocolError,
+  parseIpcRequest,
+  parseIpcResponse,
+} from "./ipc/protocol";
+export type {
+  IpcDetailValue,
+  IpcDetails,
+  IpcEmptyParams,
+  IpcError,
+  IpcErrorCode,
+  IpcErrorResponse,
+  IpcMethod,
+  IpcRequest,
+  IpcRequestInput,
+  IpcRequestParseResult,
+  IpcResponse,
+  IpcResponseParseResult,
+  IpcResult,
+  IpcSuccessResponse,
+} from "./ipc/protocol";
+export { handleIpcLine, serveNativeUiIpc } from "./ipc/server";
+export type { IpcServerOptions } from "./ipc/server";
+export {
+  IpcTransportError,
+  makeStdioTransport,
+  readJsonLines,
+} from "./ipc/transport";
+export type {
+  IpcChunk,
+  IpcTransport,
+  IpcWritable,
+  StdioTransportOptions,
+} from "./ipc/transport";
+export {
+  IPC_METHODS,
+  IPC_PROTOCOL_VERSION,
+  MAX_IPC_MESSAGE_BYTES,
+  MAX_IPC_REQUEST_ID_BYTES,
+} from "./ipc/protocol";
