@@ -9,6 +9,7 @@ Native Monitor Tools is licensed under the GNU General Public License version 3 
 ## Workspace layout
 
 - `apps/desktop` — the Bun desktop runtime entry point
+- `apps/native-ui` — the Native SDK native-rendered Windows UI
 - `apps/site` — a dependency-free placeholder for a future site
 - `packages/core` — shared core package, ready for future monitor logic
 
@@ -23,6 +24,15 @@ To run the desktop app:
 ```sh
 bun run dev
 ```
+
+To validate or run the native UI (requires the Native SDK CLI and Zig for a full build):
+
+```sh
+bun run ui:check
+bun run ui:dev
+```
+
+The Native SDK UI is a separate native-rendered app. It communicates with the Bun/Effect desktop backend through a versioned IPC boundary; it does not embed a JavaScript runtime or import backend services directly.
 
 Useful checks:
 
