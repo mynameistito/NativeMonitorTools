@@ -91,6 +91,22 @@ const decodeHex = (value: string): Uint8Array | null => {
   return output;
 };
 
+const hexDigit = (value: number): string => {
+  const digits = "0123456789abcdef";
+  return digits.slice(value, value + 1);
+};
+
+/** Encode a response for the text-only child-process carrier. */
+export const encodeNativeUiArgument = (value: Uint8Array): string => {
+  let output = "";
+  for (const byte of value) {
+    const high = Math.floor(byte / 16);
+    const low = byte - high * 16;
+    output += hexDigit(high) + hexDigit(low);
+  }
+  return output;
+};
+
 const displayResolution = (display: WindowsDisplay): Uint8Array =>
   textEncoder.encode(
     `${display.snapshot.mode.width}×${display.snapshot.mode.height}`

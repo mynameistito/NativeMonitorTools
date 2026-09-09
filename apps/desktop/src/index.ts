@@ -5,7 +5,11 @@ import { makeDesktopApplicationLayer } from "./application/composition";
 import { DesktopApplication } from "./application/service";
 import { parseCliArgs } from "./cli/parser";
 import { renderCliError, renderCliResult } from "./cli/renderer";
-import { decodeNativeUiArgument, runNativeUiRequest } from "./native-ui-host";
+import {
+  decodeNativeUiArgument,
+  encodeNativeUiArgument,
+  runNativeUiRequest,
+} from "./native-ui-host";
 import {
   parseDesktopPlatform,
   resolveDesktopPaths,
@@ -25,7 +29,10 @@ const run = async (): Promise<void> => {
       encoded === undefined
         ? new Uint8Array(await new Response(Bun.stdin.stream()).arrayBuffer())
         : (decodeNativeUiArgument(encoded) ?? new Uint8Array(0));
-    process.stdout.write(await runNativeUiRequest(input));
+    const output = await runNativeUiRequest(input);
+    process.stdout.write(
+      encoded === undefined ? output : encodeNativeUiArgument(output)
+    );
     return;
   }
   const paths = resolveDesktopPaths(

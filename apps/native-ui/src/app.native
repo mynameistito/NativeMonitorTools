@@ -147,7 +147,7 @@
                       <badge variant="secondary">{previewMonitorCount} monitors</badge>
                     </row>
                     <separator />
-                    <text size="sm" foreground="text_muted" wrap="true">Previewing a profile sends its stable name to the IPC backend. The backend owns validation; display mutation is not enabled until the native mode port is complete.</text>
+                    <text size="sm" foreground="text_muted" wrap="true">Previewing a profile sends its stable name to the IPC backend. The backend owns validation; this Native UI action remains preview-only.</text>
                     <row gap="8" main="end">
                       <button variant="primary" disabled="{applyingProfile or selectedProfileId.length == 0}" on-press="apply_profile">{applyLabel}</button>
                     </row>

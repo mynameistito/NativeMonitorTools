@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   decodeNativeUiArgument,
+  encodeNativeUiArgument,
   runNativeUiRequest,
 } from "../src/native-ui-host";
 
@@ -12,6 +13,13 @@ describe("Native SDK UI host framing", () => {
     );
     expect(decodeNativeUiArgument("01010")).toBeNull();
     expect(decodeNativeUiArgument("0101zz00")).toBeNull();
+  });
+
+  it("round-trips every byte through the text-only response carrier", () => {
+    const frame = new Uint8Array([0, 1, 127, 128, 254, 255]);
+    expect(decodeNativeUiArgument(encodeNativeUiArgument(frame))).toEqual(
+      frame
+    );
   });
 
   it("rejects malformed requests without touching platform services", async () => {
