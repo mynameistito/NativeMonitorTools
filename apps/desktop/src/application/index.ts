@@ -12,3 +12,19 @@ export type {
 export { makeDesktopApplicationLayer } from "./composition";
 export { DesktopApplication, DesktopApplicationLive } from "./service";
 export type { DesktopApplicationApi, DesktopApplicationError } from "./service";
+export {
+  makeNativeUiApplication,
+  makeProductionNativeUiApplication,
+  NativeUiAdapterError,
+  NativeUiApplication,
+} from "./native-ui";
+export type {
+  NativeUiApplicationApi,
+  NativeUiApplicationDependencies,
+  NativeUiApplicationError,
+  NativeUiCapability,
+  NativeUiCapabilityName,
+  NativeUiCapabilitySnapshot,
+  NativeUiSavedProfile,
+} from "./native-ui";
+export { makeNativeUiApplicationLayer } from "./composition";

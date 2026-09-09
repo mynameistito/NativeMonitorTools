@@ -1,7 +1,8 @@
 import { layer as bunFileSystemLayer } from "@effect/platform-bun/BunFileSystem";
-import { MonitorRuntimeLive } from "@native-monitor-tools/core";
+import { MonitorRuntime, MonitorRuntimeLive } from "@native-monitor-tools/core";
 import { Effect, FileSystem, Layer } from "effect";
 
+import { createWindowsDisplayPort } from "../platform/windows";
 import type { DesktopPaths } from "../storage/configuration";
 import {
   makeJsonProfileStore,
@@ -11,6 +12,7 @@ import {
   DisplayApplierUnsupported,
   MonitorSourceUnsupported,
 } from "./capabilities";
+import { makeNativeUiApplication, NativeUiApplication } from "./native-ui";
 import { DesktopApplicationLive } from "./service";
 
 /**
@@ -34,6 +36,47 @@ export const makeDesktopApplicationLayer = (paths: DesktopPaths) => {
     Layer.provide(store),
     Layer.provide(MonitorSourceUnsupported),
     Layer.provide(DisplayApplierUnsupported),
+    Layer.provide(MonitorRuntimeLive)
+  );
+};
+
+/**
+ * Compose the Native SDK UI application with profile persistence and the
+ * existing Windows monitor discovery adapter.
+ *
+ * The returned service deliberately does not include a display mutation port;
+ * its apply operation is preview-only.
+ *
+ * @param paths - Resolved application data paths.
+ * @param platform - Host platform identifier used for capability reporting.
+ * @returns A layer providing the Native SDK UI application service.
+ */
+export const makeNativeUiApplicationLayer = (
+  paths: DesktopPaths,
+  platform: string = process.platform
+) => {
+  const store = Layer.effect(
+    ProfileStoreService,
+    Effect.gen(function* profileStoreLayerEffect() {
+      const fileSystem = yield* FileSystem.FileSystem;
+      return makeJsonProfileStore(paths.profileDirectory, fileSystem);
+    })
+  ).pipe(Layer.provide(bunFileSystemLayer));
+  const application = Layer.effect(
+    NativeUiApplication,
+    Effect.gen(function* nativeUiApplicationLayerEffect() {
+      const profileStore = yield* ProfileStoreService;
+      const runtime = yield* MonitorRuntime;
+      return makeNativeUiApplication({
+        monitorPort: createWindowsDisplayPort(),
+        platform,
+        profileStore,
+        runtime,
+      });
+    })
+  );
+  return application.pipe(
+    Layer.provide(store),
     Layer.provide(MonitorRuntimeLive)
   );
 };
