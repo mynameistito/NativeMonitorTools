@@ -1,0 +1,248 @@
+<column grow="1" background="background">
+  <row height="68" padding="16" gap="12" cross="center" background="surface" label="Application header">
+    <column gap="2">
+      <text size="heading">Native Monitor Tools</text>
+      <text size="sm" foreground="text_muted">A native shell for displays, profiles, color, and window tools</text>
+    </column>
+    <spacer grow="1" />
+    <if test="{ipcState == 'error'}">
+      <badge variant="destructive">IPC error</badge>
+    </if>
+    <if test="{ipcState == 'ready'}">
+      <badge variant="success">Backend connected</badge>
+    </if>
+    <button variant="primary" on-press="refresh" disabled="{displayStatus == 'loading' or profileStatus == 'loading'}">Refresh</button>
+  </row>
+  <separator />
+  <row grow="1">
+    <column width="220" padding="12" gap="6" background="surface" label="Primary navigation">
+      <text size="sm" foreground="text_muted" padding="8">Workspace</text>
+      <button selected="{section == 'displays'}" on-press="show_displays">Displays</button>
+      <button selected="{section == 'profiles'}" on-press="show_profiles">Profiles</button>
+      <button selected="{section == 'color'}" on-press="show_color">Color</button>
+      <button selected="{section == 'window_tools'}" on-press="show_window_tools">Window Tools</button>
+      <button selected="{section == 'settings'}" on-press="show_settings">Settings</button>
+      <spacer grow="1" />
+      <separator />
+      <text size="sm" foreground="text_muted">IPC protocol v{protocolVersion}</text>
+      <text size="sm" foreground="text_muted">Native UI · no WebView</text>
+    </column>
+    <scroll grow="1" label="Main content">
+      <column padding="24" gap="16">
+        <if test="{section == 'displays'}">
+          <column gap="4">
+            <text size="display">Displays</text>
+            <text foreground="text_muted">Connected monitors and their current topology.</text>
+          </column>
+          <if test="{displayStatus == 'loading'}">
+            <panel padding="24" background="surface" radius="lg" border-color="border" label="Loading displays">
+              <column gap="8" cross="center">
+                <spinner />
+                <text>Discovering displays…</text>
+                <text size="sm" foreground="text_muted">Waiting for the versioned IPC backend.</text>
+              </column>
+            </panel>
+          </if>
+          <if test="{displayStatus == 'error'}">
+            <panel padding="24" background="surface" radius="lg" border-color="destructive" label="Display error">
+              <column gap="8">
+                <text><span weight="bold">Display discovery failed</span></text>
+                <text size="sm" foreground="text_muted" wrap="true">{lastError}</text>
+                <button size="sm" variant="secondary" on-press="refresh">Retry</button>
+              </column>
+            </panel>
+          </if>
+          <if test="{displayStatus == 'empty'}">
+            <panel padding="24" background="surface" radius="lg" border-color="border" label="No displays">
+              <column gap="8">
+                <text><span weight="bold">No displays reported</span></text>
+                <text size="sm" foreground="text_muted" wrap="true">The backend is reachable, but it did not return a monitor. Check the platform adapter or connect a display.</text>
+                <button size="sm" variant="secondary" on-press="refresh">Refresh topology</button>
+              </column>
+            </panel>
+          </if>
+          <if test="{displayStatus == 'ready'}">
+            <column gap="12">
+              <row gap="8" cross="center">
+                <text><span weight="bold">Connected displays</span></text>
+                <badge variant="secondary">{displays.length}</badge>
+              </row>
+              <for each="displays" key="id" as="display">
+                <card padding="16" background="surface" radius="lg" border-color="border" label="{display.name}">
+                  <column gap="12">
+                    <row gap="12" cross="center">
+                      <column grow="1" gap="4">
+                        <text size="heading">{display.name}</text>
+                        <text size="sm" foreground="text_muted">{display.resolution} · {display.position}</text>
+                      </column>
+                      <if test="{display.primary}">
+                        <badge variant="success">Primary</badge>
+                      </if>
+                    </row>
+                    <row gap="8">
+                      <if test="{display.colorSupported}">
+                        <badge variant="secondary">Color controls</badge>
+                      </if>
+                      <if test="{display.windowToolsSupported}">
+                        <badge variant="secondary">Window tools</badge>
+                      </if>
+                      <if test="{not display.colorSupported and not display.windowToolsSupported}">
+                        <text size="sm" foreground="text_muted">Basic display information only</text>
+                      </if>
+                    </row>
+                  </column>
+                </card>
+              </for>
+            </column>
+          </if>
+        </if>
+
+        <if test="{section == 'profiles'}">
+          <column gap="4">
+            <text size="display">Profiles</text>
+            <text foreground="text_muted">Preview and apply saved monitor layouts without leaving the native shell.</text>
+          </column>
+          <if test="{profileStatus == 'loading'}">
+            <panel padding="24" background="surface" radius="lg" border-color="border" label="Loading profiles">
+              <column gap="8" cross="center">
+                <spinner />
+                <text>Loading saved profiles…</text>
+              </column>
+            </panel>
+          </if>
+          <if test="{profileStatus == 'error'}">
+            <panel padding="24" background="surface" radius="lg" border-color="destructive" label="Profile error">
+              <column gap="8">
+                <text><span weight="bold">Profiles unavailable</span></text>
+                <text size="sm" foreground="text_muted" wrap="true">{lastError}</text>
+                <button size="sm" variant="secondary" on-press="refresh">Retry</button>
+              </column>
+            </panel>
+          </if>
+          <if test="{profileStatus == 'empty'}">
+            <panel padding="24" background="surface" radius="lg" border-color="border" label="No profiles">
+              <column gap="8">
+                <text><span weight="bold">No saved profiles yet</span></text>
+                <text size="sm" foreground="text_muted" wrap="true">Profiles will appear here when the versioned backend exposes them.</text>
+                <button size="sm" variant="secondary" on-press="refresh">Refresh profiles</button>
+              </column>
+            </panel>
+          </if>
+          <if test="{profileStatus == 'ready'}">
+            <row gap="16" cross="start">
+              <column width="280" gap="6" label="Saved profile list">
+                <text size="sm" foreground="text_muted">Saved profiles</text>
+                <for each="profiles" key="id" as="profile">
+                  <button selected="{selectedProfileId == profile.id}" on-press="select_profile:{profile.id}">{profile.name}</button>
+                </for>
+              </column>
+              <if test="{previewReady}">
+                <card grow="1" padding="20" background="surface" radius="lg" border-color="border" label="Profile preview">
+                  <column gap="12">
+                    <row gap="8" cross="center">
+                      <column grow="1" gap="4">
+                        <text size="heading">{previewName}</text>
+                        <text size="sm" foreground="text_muted">{previewSummary}</text>
+                      </column>
+                      <badge variant="secondary">{previewMonitorCount} monitors</badge>
+                    </row>
+                    <separator />
+                    <text size="sm" foreground="text_muted" wrap="true">Applying a profile sends the selected id to the IPC backend. The backend owns validation and the native display change.</text>
+                    <row gap="8" main="end">
+                      <button variant="primary" disabled="{applyingProfile or selectedProfileId < 0}" on-press="apply_profile">{applyLabel}</button>
+                    </row>
+                    <if test="{applyStatus == 'ready'}">
+                      <badge variant="success">Profile applied</badge>
+                    </if>
+                    <if test="{applyStatus == 'error'}">
+                      <text size="sm" foreground="destructive">{lastError}</text>
+                    </if>
+                  </column>
+                </card>
+              </if>
+            </row>
+          </if>
+        </if>
+
+        <if test="{section == 'color'}">
+          <column gap="4">
+            <text size="display">Color</text>
+            <text foreground="text_muted">Display-specific color workflows will live here.</text>
+          </column>
+          <if test="{capabilities.color}">
+            <card padding="20" background="surface" radius="lg" border-color="border" label="Color controls">
+              <column gap="8">
+                <text size="heading">Color controls available</text>
+                <text size="sm" foreground="text_muted" wrap="true">At least one connected display advertises color support. The control surface is intentionally reserved for the backend's versioned color commands.</text>
+                <badge variant="secondary">Capability detected</badge>
+              </column>
+            </card>
+          </if>
+          <if test="{not capabilities.color}">
+            <panel padding="24" background="surface" radius="lg" border-color="border" label="Color unavailable">
+              <column gap="8">
+                <text><span weight="bold">Color controls are unavailable</span></text>
+                <text size="sm" foreground="text_muted" wrap="true">No connected display reported color capability. This is an honest empty state; no unsupported platform API is called by the UI.</text>
+              </column>
+            </panel>
+          </if>
+        </if>
+
+        <if test="{section == 'window_tools'}">
+          <column gap="4">
+            <text size="display">Window Tools</text>
+            <text foreground="text_muted">Placement, snapping, and per-display window actions.</text>
+          </column>
+          <if test="{capabilities.windowTools}">
+            <card padding="20" background="surface" radius="lg" border-color="border" label="Window tools">
+              <column gap="8">
+                <text size="heading">Window tools available</text>
+                <text size="sm" foreground="text_muted" wrap="true">The connected topology advertises window-tool support. Actions will be routed through the same versioned IPC command boundary.</text>
+                <badge variant="secondary">Capability detected</badge>
+              </column>
+            </card>
+          </if>
+          <if test="{not capabilities.windowTools}">
+            <panel padding="24" background="surface" radius="lg" border-color="border" label="Window tools unavailable">
+              <column gap="8">
+                <text><span weight="bold">Window tools are unavailable</span></text>
+                <text size="sm" foreground="text_muted" wrap="true">The backend did not report window-placement capability for the current platform or topology.</text>
+              </column>
+            </panel>
+          </if>
+        </if>
+
+        <if test="{section == 'settings'}">
+          <column gap="4">
+            <text size="display">Settings</text>
+            <text foreground="text_muted">Native shell and backend connection details.</text>
+          </column>
+          <card padding="20" background="surface" radius="lg" border-color="border" label="Connection settings">
+            <column gap="12">
+              <row gap="12">
+                <text width="180" foreground="text_muted">IPC state</text>
+                <text>{ipcState}</text>
+              </row>
+              <row gap="12">
+                <text width="180" foreground="text_muted">Protocol version</text>
+                <text>v{protocolVersion}</text>
+              </row>
+              <separator />
+              <text size="sm" foreground="text_muted">Capabilities</text>
+              <row gap="8">
+                <if test="{capabilities.displays}"><badge variant="success">Displays</badge></if>
+                <if test="{capabilities.profiles}"><badge variant="success">Profiles</badge></if>
+                <if test="{capabilities.color}"><badge variant="success">Color</badge></if>
+                <if test="{capabilities.windowTools}"><badge variant="success">Window tools</badge></if>
+                <if test="{not capabilities.displays and not capabilities.profiles and not capabilities.color and not capabilities.windowTools}"><text size="sm" foreground="text_muted">No capabilities reported yet</text></if>
+              </row>
+              <button size="sm" variant="secondary" on-press="refresh">Reconnect</button>
+            </column>
+          </card>
+        </if>
+      </column>
+    </scroll>
+  </row>
+  <separator />
+  <status-bar>{statusText}</status-bar>
+</column>
