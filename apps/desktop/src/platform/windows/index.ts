@@ -31,7 +31,6 @@ const DEVMODE_HEIGHT_OFFSET = 176;
 const DEVMODE_FREQUENCY_OFFSET = 184;
 const DEVMODE_POSITION_X_OFFSET = 76;
 const DEVMODE_POSITION_Y_OFFSET = 80;
-const EDD_GET_DEVICE_INTERFACE_NAME = 1;
 const DM_POSITION = 0x20;
 const DM_BITSPERPEL = 262_144;
 const DM_PELSWIDTH = 524_288;
@@ -838,7 +837,7 @@ const discoverNative = async (): Promise<
             ffi.ptr(deviceNameBuffer),
             0,
             ffi.ptr(displayDevice),
-            EDD_GET_DEVICE_INTERFACE_NAME
+            0
           ) !== 0;
         const devicePath = hasPhysicalIdentity
           ? readWideString(displayDeviceView, 328, DISPLAY_DEVICE_ID_LENGTH)
