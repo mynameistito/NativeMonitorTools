@@ -30,6 +30,7 @@ import {
   UnsupportedCapability,
 } from "./capabilities";
 import type { DisplayApplierApi, MonitorSourceApi } from "./capabilities";
+import type { NativePlatformError } from "./native-platform-error";
 
 /** Errors that can be returned by a desktop application operation. */
 export type DesktopApplicationError =
@@ -39,6 +40,7 @@ export type DesktopApplicationError =
   | InvalidTopology
   | ProfileNotFound
   | ProfileStoreError
+  | NativePlatformError
   | UnsupportedCapability;
 
 /** Application service for parsed desktop commands. */

@@ -3,6 +3,7 @@ export {
   MonitorSourceUnsupported,
   UnsupportedCapability,
 } from "./capabilities";
+export { NativePlatformError } from "./native-platform-error";
 export { DisplayApplier, MonitorSource } from "./capabilities";
 export type {
   CapabilityName,

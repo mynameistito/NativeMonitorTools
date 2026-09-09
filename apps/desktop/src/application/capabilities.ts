@@ -5,6 +5,8 @@ import type {
 } from "@native-monitor-tools/core";
 import { Context, Data, Effect, Layer } from "effect";
 
+import type { NativePlatformError } from "./native-platform-error";
+
 /** A capability which is deliberately not implemented by this desktop shell. */
 export type CapabilityName =
   | "cursor"
@@ -25,7 +27,7 @@ export class UnsupportedCapability extends Data.TaggedError(
 export interface MonitorSourceApi {
   readonly currentTopology: () => Effect.Effect<
     MonitorTopology,
-    UnsupportedCapability
+    UnsupportedCapability | NativePlatformError
   >;
 }
 
