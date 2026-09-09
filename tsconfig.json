@@ -31,5 +31,5 @@
     "noPropertyAccessFromIndexSignature": false
   },
   "include": ["apps/**/*.ts", "packages/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist", "apps/native-ui"]
 }

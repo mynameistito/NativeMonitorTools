@@ -19,8 +19,8 @@
     "ui:test": "bunx @native-sdk/cli test apps/native-ui",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
-    "lint": "ultracite check",
-    "check": "ultracite check",
+    "lint": "ultracite check apps/desktop packages",
+    "check": "ultracite check apps/desktop packages",
     "fix": "ultracite fix",
     "prepare": "lefthook install"
   },
