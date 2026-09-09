@@ -1,6 +1,10 @@
 import { layer as bunFileSystemLayer } from "@effect/platform-bun/BunFileSystem";
 import { MonitorRuntime, MonitorRuntimeLive } from "@native-monitor-tools/core";
-import type { MonitorTopology } from "@native-monitor-tools/core";
+import type {
+  ApplyPlan,
+  DisplayProfile,
+  MonitorTopology,
+} from "@native-monitor-tools/core";
 import { Effect, FileSystem, Layer } from "effect";
 
 import { createWindowsDisplayPort } from "../platform/windows";
@@ -15,7 +19,7 @@ import {
   ProfileStore as ProfileStoreService,
 } from "../storage/profile-store";
 import {
-  DisplayApplierUnsupported,
+  DisplayApplier,
   MonitorSource,
   UnsupportedCapability,
 } from "./capabilities";
@@ -25,6 +29,8 @@ import {
   NativeUiApplication,
 } from "./native-ui";
 import { DesktopApplicationLive } from "./service";
+
+const DISPLAY_APPLY_CAPABILITY = "display-apply" as const;
 
 const mapWindowsDiscovery = (
   result: WindowsPlatformResult<WindowsDisplayDiscovery>
@@ -51,6 +57,28 @@ const mapWindowsDiscovery = (
   );
 };
 
+const mapWindowsApplyResult = (
+  result: WindowsPlatformResult<void>
+): Effect.Effect<void, NativePlatformError | UnsupportedCapability> => {
+  if (result._tag === "Success") {
+    return Effect.void;
+  }
+  if (result._tag === "Unsupported") {
+    return Effect.fail(
+      new UnsupportedCapability({
+        capability: DISPLAY_APPLY_CAPABILITY,
+        reason: result.reason,
+      })
+    );
+  }
+  return Effect.fail(
+    new NativePlatformError({
+      capability: DISPLAY_APPLY_CAPABILITY,
+      reason: result.reason,
+    })
+  );
+};
+
 const makeWindowsMonitorSourceLayer = (port: WindowsDisplayPort) =>
   Layer.succeed(MonitorSource, {
     currentTopology: () => {
@@ -72,12 +100,37 @@ const makeWindowsMonitorSourceLayer = (port: WindowsDisplayPort) =>
     },
   });
 
+const makeWindowsDisplayApplierLayer = (port: WindowsDisplayPort) =>
+  Layer.succeed(DisplayApplier, {
+    apply: (
+      current: MonitorTopology,
+      desired: DisplayProfile,
+      plan: ApplyPlan
+    ): Effect.Effect<void, NativePlatformError | UnsupportedCapability> => {
+      const application: Effect.Effect<
+        WindowsPlatformResult<void>,
+        NativePlatformError
+      > = Effect.tryPromise({
+        catch: (error) =>
+          new NativePlatformError({
+            capability: "display-apply",
+            reason:
+              error instanceof Error
+                ? error.message
+                : "The Windows display adapter failed",
+          }),
+        try: () => port.applyDisplayPlan(current, desired, plan),
+      });
+      return application.pipe(Effect.flatMap(mapWindowsApplyResult));
+    },
+  });
+
 /**
  * Compose the production desktop shell with live Windows monitor discovery.
  *
- * The filesystem is live because profile persistence is platform-independent;
- * display mutation remains an explicit unsupported port until mode mutation is
- * implemented by the Windows adapter.
+ * The filesystem and Windows display ports are live. Display mutation remains
+ * dry-run-first at the application boundary and is only invoked for an
+ * explicitly non-dry-run CLI command.
  *
  * @param paths - Resolved application data paths.
  * @returns A layer providing the desktop application service.
@@ -90,13 +143,13 @@ export const makeDesktopApplicationLayer = (paths: DesktopPaths) => {
       return makeJsonProfileStore(paths.profileDirectory, fileSystem);
     })
   ).pipe(Layer.provide(bunFileSystemLayer));
-  const monitorSource = makeWindowsMonitorSourceLayer(
-    createWindowsDisplayPort()
-  );
+  const monitorPort = createWindowsDisplayPort();
+  const monitorSource = makeWindowsMonitorSourceLayer(monitorPort);
+  const displayApplier = makeWindowsDisplayApplierLayer(monitorPort);
   return DesktopApplicationLive.pipe(
     Layer.provide(store),
     Layer.provide(monitorSource),
-    Layer.provide(DisplayApplierUnsupported),
+    Layer.provide(displayApplier),
     Layer.provide(MonitorRuntimeLive)
   );
 };

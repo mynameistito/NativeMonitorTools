@@ -48,5 +48,6 @@ bun run test
 ```
 
 The desktop runtime owns the monitor adapter, profile storage, and versioned IPC
-host. The Native SDK UI reaches it through a generated service request; display
-mutation remains preview-only until the platform mutation port is implemented.
+host. The Native SDK UI reaches it through a generated service request and keeps
+profile actions preview-only; the explicit desktop CLI `profile apply` command
+can apply a non-dry-run display plan through the Windows adapter.

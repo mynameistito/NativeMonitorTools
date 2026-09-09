@@ -4,6 +4,9 @@
 import type { FFIType, JSCallback, Pointer, ptr, read } from "bun:ffi";
 
 import type {
+  ApplyPlan,
+  DisplayProfile,
+  DisplayProfileMonitor,
   MonitorId,
   MonitorSnapshot,
   MonitorTopology,
@@ -21,10 +24,30 @@ const DISPLAY_DEVICE_ID_LENGTH = 128;
 const DISPLAY_DEVICE_SIZE = 840;
 const DEVMODE_SIZE = 220;
 const DEVMODE_DM_SIZE_OFFSET = 68;
+const DEVMODE_FIELDS_OFFSET = 72;
 const DEVMODE_BITS_PER_PIXEL_OFFSET = 168;
 const DEVMODE_WIDTH_OFFSET = 172;
 const DEVMODE_HEIGHT_OFFSET = 176;
 const DEVMODE_FREQUENCY_OFFSET = 184;
+const DEVMODE_POSITION_X_OFFSET = 76;
+const DEVMODE_POSITION_Y_OFFSET = 80;
+const DM_POSITION = 0x20;
+const DM_BITSPERPEL = 262_144;
+const DM_PELSWIDTH = 524_288;
+const DM_PELSHEIGHT = 1_048_576;
+const DM_DISPLAYFREQUENCY = 4_194_304;
+const CDS_UPDATEREGISTRY = 0x1;
+const CDS_SET_PRIMARY = 0x10;
+const CDS_NORESET = 268_435_456;
+const DISP_CHANGE_SUCCESSFUL = 0;
+const DISP_CHANGE_RESTART = 1;
+const DISP_CHANGE_FAILED = -1;
+const DISP_CHANGE_BADMODE = -2;
+const DISP_CHANGE_NOTUPDATED = -3;
+const DISP_CHANGE_BADFLAGS = -4;
+const DISP_CHANGE_BADPARAM = -5;
+const DISP_CHANGE_BADDUALVIEW = -6;
+const DISP_CHANGE_INCOMPLETE = -7;
 const ENUM_CURRENT_SETTINGS = 0xff_ff_ff_ff;
 const MONITORINFOEX_SIZE = 104;
 const MONITORINFO_FLAGS_OFFSET = 36;
@@ -106,7 +129,8 @@ export type WindowsPlatformOperation =
   | "setGammaRamp"
   | "getBrightnessContrastCapabilities"
   | "setBrightness"
-  | "setContrast";
+  | "setContrast"
+  | "applyDisplayPlan";
 
 /** A typed success, unsupported capability, or native-call failure. */
 export type WindowsPlatformResult<T> =
@@ -150,6 +174,12 @@ export interface WindowsDisplayPort {
   readonly setContrast: (
     monitorId: MonitorId,
     value: number
+  ) => Promise<WindowsPlatformResult<void>>;
+  /** Apply a validated display profile plan through ChangeDisplaySettingsExW. */
+  readonly applyDisplayPlan: (
+    current: MonitorTopology,
+    desired: DisplayProfile,
+    plan: ApplyPlan
   ) => Promise<WindowsPlatformResult<void>>;
 }
 
@@ -200,6 +230,13 @@ interface User32Symbols {
     device: Pointer,
     mode: number,
     devMode: Pointer
+  ) => number;
+  readonly ChangeDisplaySettingsExW: (
+    deviceName: Pointer | null,
+    devMode: Pointer | null,
+    window: Pointer | null,
+    flags: number,
+    lParam: Pointer | null
   ) => number;
   readonly GetMonitorInfoW: (
     monitor: NativePointer,
@@ -379,6 +416,16 @@ const readRect = (view: DataView, byteOffset: number): NativeRect => {
 };
 
 const makeUser32Symbols = (ffiType: typeof FFIType) => ({
+  ChangeDisplaySettingsExW: {
+    args: [
+      ffiType.ptr,
+      ffiType.ptr,
+      ffiType.ptr,
+      ffiType.uint32_t,
+      ffiType.ptr,
+    ] as const,
+    returns: ffiType.int32_t,
+  },
   EnumDisplayDevicesW: {
     args: [
       ffiType.ptr,
@@ -528,6 +575,129 @@ const writeGammaRamp = (ramp: GammaRamp): Uint8Array => {
   values.set(ramp.green, GAMMA_CHANNEL_LENGTH);
   values.set(ramp.blue, GAMMA_CHANNEL_LENGTH * 2);
   return buffer;
+};
+
+interface DisplayChangeRequest {
+  mode: boolean;
+  position: boolean;
+  primary: boolean;
+}
+
+const collectDisplayChangeRequests = (
+  plan: ApplyPlan
+): ReadonlyMap<MonitorId, DisplayChangeRequest> => {
+  const changes = new Map<MonitorId, DisplayChangeRequest>();
+  for (const operation of plan.operations) {
+    const current = changes.get(operation.monitorId) ?? {
+      mode: false,
+      position: false,
+      primary: false,
+    };
+    if (operation._tag === "SetDisplayMode") {
+      current.mode = true;
+    }
+    if (operation._tag === "MoveMonitor") {
+      current.position = true;
+    }
+    if (operation._tag === "SetPrimary") {
+      current.position = true;
+      current.primary = true;
+    }
+    changes.set(operation.monitorId, current);
+  }
+  return changes;
+};
+
+const isNativeInt32 = (value: number): boolean =>
+  Number.isInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647;
+
+const isNativeUint32 = (value: number): boolean =>
+  Number.isInteger(value) && value >= 0 && value <= 4_294_967_295;
+
+const isNativeDisplayMode = (target: DisplayProfileMonitor): boolean => {
+  if (!isNativeUint32(target.mode.width)) {
+    return false;
+  }
+  if (!isNativeUint32(target.mode.height)) {
+    return false;
+  }
+  if (!isNativeUint32(target.mode.refreshRate)) {
+    return false;
+  }
+  return (
+    target.mode.bitsPerPixel === undefined ||
+    isNativeUint32(target.mode.bitsPerPixel)
+  );
+};
+
+const makeDisplayChangeMode = (
+  target: DisplayProfileMonitor,
+  change: DisplayChangeRequest
+): Uint8Array | string => {
+  const positionValid =
+    isNativeInt32(target.position.x) && isNativeInt32(target.position.y);
+  const modeValid = isNativeDisplayMode(target);
+  if (change.position && !positionValid) {
+    return "Display positions must fit signed 32-bit Windows coordinates";
+  }
+  if (change.mode && !modeValid) {
+    return "Display modes must use integer values supported by Windows";
+  }
+
+  const buffer = new Uint8Array(DEVMODE_SIZE);
+  const view = new DataView(buffer.buffer);
+  view.setUint16(DEVMODE_DM_SIZE_OFFSET, DEVMODE_SIZE, true);
+  let fields = 0;
+  if (change.position) {
+    fields += DM_POSITION;
+    view.setInt32(DEVMODE_POSITION_X_OFFSET, target.position.x, true);
+    view.setInt32(DEVMODE_POSITION_Y_OFFSET, target.position.y, true);
+  }
+  if (change.mode) {
+    fields += DM_PELSWIDTH + DM_PELSHEIGHT + DM_DISPLAYFREQUENCY;
+    view.setUint32(DEVMODE_WIDTH_OFFSET, target.mode.width, true);
+    view.setUint32(DEVMODE_HEIGHT_OFFSET, target.mode.height, true);
+    view.setUint32(DEVMODE_FREQUENCY_OFFSET, target.mode.refreshRate, true);
+    if (target.mode.bitsPerPixel !== undefined) {
+      fields += DM_BITSPERPEL;
+      view.setUint32(
+        DEVMODE_BITS_PER_PIXEL_OFFSET,
+        target.mode.bitsPerPixel,
+        true
+      );
+    }
+  }
+  view.setUint32(DEVMODE_FIELDS_OFFSET, fields, true);
+  return buffer;
+};
+
+const displayChangeReason = (code: number): string => {
+  switch (code) {
+    case DISP_CHANGE_FAILED: {
+      return "The display driver failed the requested change";
+    }
+    case DISP_CHANGE_BADMODE: {
+      return "The requested display mode is unsupported";
+    }
+    case DISP_CHANGE_NOTUPDATED: {
+      return "Windows could not update the display settings";
+    }
+    case DISP_CHANGE_BADFLAGS: {
+      return "Windows rejected the display-change flags";
+    }
+    case DISP_CHANGE_BADPARAM: {
+      return "Windows rejected a display-change parameter";
+    }
+    case DISP_CHANGE_BADDUALVIEW: {
+      return "The requested change is incompatible with DualView";
+    }
+    case DISP_CHANGE_INCOMPLETE: {
+      return "The display change was incomplete";
+    }
+    default: {
+      return `ChangeDisplaySettingsExW returned ${code}`;
+    }
+  }
 };
 
 const buildDisplay = (
@@ -1145,7 +1315,99 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
       (symbols) => symbols.SetMonitorContrast
     );
 
+  const applyDisplayPlan = async (
+    _current: MonitorTopology,
+    desired: DisplayProfile,
+    plan: ApplyPlan
+  ): Promise<WindowsPlatformResult<void>> => {
+    const operation = "applyDisplayPlan" as const;
+    if (!isWindows()) {
+      return unsupportedOffWindows(operation);
+    }
+    if (plan.dryRun) {
+      return failure(operation, "A dry-run display plan cannot be applied");
+    }
+    if (plan.operations.length === 0) {
+      // oxlint-disable-next-line unicorn/no-useless-undefined -- The success payload is intentionally void.
+      return success(undefined);
+    }
+
+    const discovery = await discover();
+    if (discovery._tag === "Unsupported") {
+      return unsupported(operation, discovery.reason);
+    }
+    if (discovery._tag === "Error") {
+      return failure(operation, discovery.reason);
+    }
+
+    const desiredById = new Map(
+      desired.monitors.map((monitor) => [monitor.id, monitor])
+    );
+    const changes = collectDisplayChangeRequests(plan);
+    try {
+      const ffi = await import("bun:ffi");
+      const user32 = ffi.dlopen("user32.dll", makeUser32Symbols(ffi.FFIType));
+      try {
+        // SAFETY: These signatures match the handwritten descriptors immediately above and the Windows C ABI.
+        const symbols = user32.symbols as User32Symbols;
+        for (const [monitorId, change] of changes) {
+          const record = recordsById.get(monitorId);
+          const target = desiredById.get(monitorId);
+          if (record === undefined || target === undefined) {
+            return failure(
+              operation,
+              "The display plan references a monitor missing from the current topology"
+            );
+          }
+          const mode = makeDisplayChangeMode(target, change);
+          if (typeof mode === "string") {
+            return failure(operation, mode);
+          }
+          const deviceName = wideString(record.deviceName);
+          let flags = CDS_UPDATEREGISTRY + CDS_NORESET;
+          if (change.primary) {
+            flags += CDS_SET_PRIMARY;
+          }
+          const result = symbols.ChangeDisplaySettingsExW(
+            ffi.ptr(deviceName),
+            ffi.ptr(mode),
+            null,
+            flags,
+            null
+          );
+          if (
+            result !== DISP_CHANGE_SUCCESSFUL &&
+            result !== DISP_CHANGE_RESTART
+          ) {
+            return failure(operation, displayChangeReason(result));
+          }
+        }
+
+        const commit = symbols.ChangeDisplaySettingsExW(
+          null,
+          null,
+          null,
+          0,
+          null
+        );
+        if (
+          commit !== DISP_CHANGE_SUCCESSFUL &&
+          commit !== DISP_CHANGE_RESTART
+        ) {
+          return failure(operation, displayChangeReason(commit));
+        }
+        // oxlint-disable-next-line unicorn/no-useless-undefined -- The success payload is intentionally void.
+        return success(undefined);
+      } finally {
+        user32.close();
+      }
+    } catch (error) {
+      return failure(operation, describeFailure(error));
+    }
+  };
+
   return {
+    applyDisplayPlan,
     discover,
     getBrightnessContrastCapabilities,
     getGammaRamp,

@@ -78,6 +78,7 @@ const makeFixture = () => {
       }),
   };
   const monitorPort: WindowsDisplayPort = {
+    applyDisplayPlan: () => Promise.resolve(unsupported("applyDisplayPlan")),
     discover: () => Promise.resolve({ _tag: "Success", value: discovery }),
     getBrightnessContrastCapabilities: () =>
       Promise.resolve(unsupported("getBrightnessContrastCapabilities")),

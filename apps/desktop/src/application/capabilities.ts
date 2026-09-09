@@ -7,7 +7,7 @@ import { Context, Data, Effect, Layer } from "effect";
 
 import type { NativePlatformError } from "./native-platform-error";
 
-/** A capability which is deliberately not implemented by this desktop shell. */
+/** Names used to classify native platform capabilities and failures. */
 export type CapabilityName =
   | "cursor"
   | "display-apply"
@@ -42,7 +42,7 @@ export interface DisplayApplierApi {
     current: MonitorTopology,
     desired: DisplayProfile,
     plan: ApplyPlan
-  ) => Effect.Effect<void, UnsupportedCapability>;
+  ) => Effect.Effect<void, UnsupportedCapability | NativePlatformError>;
 }
 
 /** Effect service key for the display mutation port. */
@@ -50,7 +50,7 @@ export const DisplayApplier = Context.Service<DisplayApplierApi>(
   "@native-monitor-tools/desktop/DisplayApplier"
 );
 
-/** Live monitor source until the native monitor adapter is implemented. */
+/** Explicit fallback monitor source for hosts without a platform adapter. */
 export const MonitorSourceUnsupported = Layer.succeed(MonitorSource, {
   currentTopology: () =>
     Effect.fail(
@@ -61,7 +61,7 @@ export const MonitorSourceUnsupported = Layer.succeed(MonitorSource, {
     ),
 });
 
-/** Live display applier until the native display adapter is implemented. */
+/** Explicit fallback display applier for hosts without a platform adapter. */
 export const DisplayApplierUnsupported = Layer.succeed(DisplayApplier, {
   apply: () =>
     Effect.fail(
