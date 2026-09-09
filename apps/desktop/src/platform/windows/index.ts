@@ -31,6 +31,7 @@ const DEVMODE_HEIGHT_OFFSET = 176;
 const DEVMODE_FREQUENCY_OFFSET = 184;
 const DEVMODE_POSITION_X_OFFSET = 76;
 const DEVMODE_POSITION_Y_OFFSET = 80;
+const EDD_GET_DEVICE_INTERFACE_NAME = 1;
 const DM_POSITION = 0x20;
 const DM_BITSPERPEL = 262_144;
 const DM_PELSWIDTH = 524_288;
@@ -194,7 +195,7 @@ interface NativeDisplayRecord {
   readonly hMonitor: NativePointer;
   readonly deviceName: string;
   readonly displayName: string;
-  readonly devicePath?: string;
+  readonly devicePath: string;
   readonly bounds: NativeRect;
   readonly workArea: NativeRect;
   readonly mode: {
@@ -703,21 +704,14 @@ const displayChangeReason = (code: number): string => {
 const buildDisplay = (
   native: NativeDisplayRecord
 ): CoreResult<NativeMonitorRecord> => {
-  const identity =
-    native.devicePath === undefined
-      ? {
-          deviceName: native.deviceName,
-          source: "logical-device-name" as const,
-        }
-      : {
-          deviceName: native.deviceName,
-          devicePath: native.devicePath,
-          source: "pnp-device-id" as const,
-        };
-  const idResult =
-    native.devicePath === undefined
-      ? runCore(monitorIdFromIdentity(native.deviceName))
-      : runCore(monitorIdFromIdentity({ devicePath: native.devicePath }));
+  const identity = {
+    deviceName: native.deviceName,
+    devicePath: native.devicePath,
+    source: "pnp-device-id" as const,
+  };
+  const idResult = runCore(
+    monitorIdFromIdentity({ devicePath: native.devicePath })
+  );
   if (idResult._tag === "Failure") {
     return idResult;
   }
@@ -844,11 +838,17 @@ const discoverNative = async (): Promise<
             ffi.ptr(deviceNameBuffer),
             0,
             ffi.ptr(displayDevice),
-            0
+            EDD_GET_DEVICE_INTERFACE_NAME
           ) !== 0;
         const devicePath = hasPhysicalIdentity
           ? readWideString(displayDeviceView, 328, DISPLAY_DEVICE_ID_LENGTH)
           : "";
+        if (devicePath.length === 0) {
+          return failure(
+            "discover",
+            `Windows did not expose a stable physical identity for ${deviceName}`
+          );
+        }
         const physicalDeviceName = hasPhysicalIdentity
           ? readWideString(displayDeviceView, 68, DISPLAY_DEVICE_STRING_LENGTH)
           : "";
@@ -891,11 +891,7 @@ const discoverNative = async (): Promise<
           mode,
           workArea,
         };
-        if (devicePath.length > 0) {
-          records.push({ ...record, devicePath });
-        } else {
-          records.push(record);
-        }
+        records.push({ ...record, devicePath });
       }
       return success(records);
     } finally {
