@@ -71,21 +71,27 @@ const unavailable = <T>(): Effect.Effect<T, NativeUiApplicationError> =>
 const makeApplication = (): NativeUiApplicationApi => ({
   capabilitySnapshot: () => ({
     capabilities: {
+      color: { available: true },
       monitorDiscovery: { available: true },
       profileApplyPreview: { available: true },
       profileDiff: { available: true },
       profileList: { available: true },
       profileSave: { available: true },
       profileShow: { available: true },
+      windowTools: { available: true },
     },
     version: 1,
   }),
   diffProfile: () => unavailable(),
   discoverMonitors: () => unavailable(),
+  listColor: () => Effect.succeed([]),
   listProfiles: () => unavailable(),
+  listWindowAreas: () => Effect.succeed([]),
   previewProfileApply: () => unavailable(),
   saveProfile: () => unavailable(),
+  setColor: () => unavailable(),
   showProfile: () => unavailable(),
+  snapForegroundWindow: () => unavailable(),
 });
 
 const makePair = () => {

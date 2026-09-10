@@ -26,6 +26,11 @@ export type {
   NativeUiCapability,
   NativeUiCapabilityName,
   NativeUiCapabilitySnapshot,
+  NativeUiColorSetRequest,
+  NativeUiColorState,
   NativeUiSavedProfile,
+  NativeUiWindowArea,
+  NativeUiWindowSnapRequest,
+  NativeUiWindowSnapResult,
 } from "./native-ui";
 export { makeNativeUiApplicationLayer } from "./composition";

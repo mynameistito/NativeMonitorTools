@@ -30,6 +30,14 @@ export type {
   MagicWordToken,
 } from "./magic-words";
 export {
+  CursorPointUnavailable,
+  monitorForCursorPoint,
+  planCursorRoute,
+  routeCursorPoint,
+  routeCursorToMonitor,
+} from "./cursor-routing";
+export type { CursorRoutingError, CursorRoutingResult } from "./cursor-routing";
+export {
   nextMonitor,
   previousMonitor,
   selectMonitorAtOffset,

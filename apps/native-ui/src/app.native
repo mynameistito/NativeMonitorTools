@@ -65,7 +65,6 @@
             <column gap="12">
               <row gap="8" cross="center">
                 <text><span weight="bold">Connected displays</span></text>
-                <badge variant="secondary">{displays.length}</badge>
               </row>
               <for each="displays" key="id" as="display">
                 <card padding="16" background="surface" radius="lg" border-color="border" label="{display.name}">
@@ -149,7 +148,7 @@
                     <separator />
                     <text size="sm" foreground="text_muted" wrap="true">Previewing a profile sends its stable name to the IPC backend. The backend owns validation; this Native UI action remains preview-only.</text>
                     <row gap="8" main="end">
-                      <button variant="primary" disabled="{applyingProfile or selectedProfileId.length == 0}" on-press="apply_profile">{applyLabel}</button>
+                      <button variant="primary" disabled="{applyingProfile or not previewReady}" on-press="apply_profile">{applyLabel}</button>
                     </row>
                     <if test="{applyStatus == 'ready'}">
                       <badge variant="success">Profile preview ready</badge>
@@ -167,24 +166,76 @@
         <if test="{section == 'color'}">
           <column gap="4">
             <text size="display">Color</text>
-            <text foreground="text_muted">Display-specific color workflows will live here.</text>
+            <text foreground="text_muted">Gamma ramps and physical monitor color controls reported by the backend.</text>
           </column>
-          <if test="{capabilities.color}">
-            <card padding="20" background="surface" radius="lg" border-color="border" label="Color controls">
-              <column gap="8">
-                <text size="heading">Color controls available</text>
-                <text size="sm" foreground="text_muted" wrap="true">At least one connected display advertises color support. The control surface is intentionally reserved for the backend's versioned color commands.</text>
-                <badge variant="secondary">Capability detected</badge>
-              </column>
-            </card>
-          </if>
-          <if test="{not capabilities.color}">
-            <panel padding="24" background="surface" radius="lg" border-color="border" label="Color unavailable">
-              <column gap="8">
-                <text><span weight="bold">Color controls are unavailable</span></text>
-                <text size="sm" foreground="text_muted" wrap="true">No connected display reported color capability. This is an honest empty state; no unsupported platform API is called by the UI.</text>
+          <if test="{colorStatus == 'loading'}">
+            <panel padding="24" background="surface" radius="lg" border-color="border" label="Loading color controls">
+              <column gap="8" cross="center">
+                <spinner />
+                <text>Reading monitor color capabilities…</text>
               </column>
             </panel>
+          </if>
+          <if test="{colorStatus == 'failed'}">
+            <panel padding="24" background="surface" radius="lg" border-color="destructive" label="Color error">
+              <column gap="8">
+                <text><span weight="bold">Color controls could not be read</span></text>
+                <text size="sm" foreground="text_muted" wrap="true">{lastError}</text>
+                <button size="sm" variant="secondary" on-press="refresh">Retry</button>
+              </column>
+            </panel>
+          </if>
+          <if test="{colorStatus == 'empty'}">
+            <panel padding="24" background="surface" radius="lg" border-color="border" label="Color unavailable">
+              <column gap="8">
+                <text><span weight="bold">No color state reported</span></text>
+                <text size="sm" foreground="text_muted" wrap="true">The backend returned no monitor color state. Unsupported controls are never enabled by the UI.</text>
+              </column>
+            </panel>
+          </if>
+          <if test="{colorStatus == 'ready'}">
+            <column gap="12">
+              <row gap="8" cross="center">
+                <text><span weight="bold">Per-monitor color controls</span></text>
+              </row>
+              <for each="colors" key="id" as="color">
+                <card padding="16" background="surface" radius="lg" border-color="border" label="{color.displayName}">
+                  <column gap="10">
+                    <text size="heading">{color.displayName}</text>
+                    <row gap="8" cross="center">
+                      <if test="{color.gammaSupported}">
+                        <button size="sm" variant="secondary" disabled="{settingColor}" on-press="set_color_gamma:{color.id}">Apply gamma 1.00</button>
+                        <text size="sm" foreground="text_muted">Uniform software ramp; scalar readback is unavailable.</text>
+                      </if>
+                      <if test="{not color.gammaSupported}">
+                        <text size="sm" foreground="text_muted" wrap="true">Gamma unsupported: {color.gammaReason}</text>
+                      </if>
+                    </row>
+                    <row gap="8" cross="center">
+                      <if test="{color.brightnessSupported}">
+                        <button size="sm" variant="secondary" disabled="{settingColor or color.brightnessCurrent >= color.brightnessMaximum}" on-press="increase_color_brightness:{color.id}">Brightness +10</button>
+                        <text size="sm" foreground="text_muted">{color.brightnessCurrent} ({color.brightnessMinimum}–{color.brightnessMaximum})</text>
+                      </if>
+                      <if test="{not color.brightnessSupported}">
+                        <text size="sm" foreground="text_muted" wrap="true">Brightness unsupported: {color.brightnessReason}</text>
+                      </if>
+                    </row>
+                    <row gap="8" cross="center">
+                      <if test="{color.contrastSupported}">
+                        <button size="sm" variant="secondary" disabled="{settingColor or color.contrastCurrent >= color.contrastMaximum}" on-press="increase_color_contrast:{color.id}">Contrast +10</button>
+                        <text size="sm" foreground="text_muted">{color.contrastCurrent} ({color.contrastMinimum}–{color.contrastMaximum})</text>
+                      </if>
+                      <if test="{not color.contrastSupported}">
+                        <text size="sm" foreground="text_muted" wrap="true">Contrast unsupported: {color.contrastReason}</text>
+                      </if>
+                    </row>
+                    <if test="{not capabilities.color}">
+                      <badge variant="secondary">No writable color controls reported</badge>
+                    </if>
+                  </column>
+                </card>
+              </for>
+            </column>
           </if>
         </if>
 
@@ -193,16 +244,52 @@
             <text size="display">Window Tools</text>
             <text foreground="text_muted">Placement, snapping, and per-display window actions.</text>
           </column>
-          <if test="{capabilities.windowTools}">
-            <card padding="20" background="surface" radius="lg" border-color="border" label="Window tools">
+          <if test="{windowAreaStatus == 'loading'}">
+            <panel padding="24" background="surface" radius="lg" border-color="border" label="Loading window tools">
+              <column gap="8" cross="center">
+                <spinner />
+                <text>Loading built-in snap areas…</text>
+              </column>
+            </panel>
+          </if>
+          <if test="{windowAreaStatus == 'failed'}">
+            <panel padding="24" background="surface" radius="lg" border-color="destructive" label="Window tools error">
               <column gap="8">
-                <text size="heading">Window tools available</text>
-                <text size="sm" foreground="text_muted" wrap="true">The connected topology advertises window-tool support. Actions will be routed through the same versioned IPC command boundary.</text>
-                <badge variant="secondary">Capability detected</badge>
+                <text><span weight="bold">Window tools unavailable</span></text>
+                <text size="sm" foreground="text_muted" wrap="true">{lastError}</text>
+                <button size="sm" variant="secondary" on-press="refresh">Retry</button>
+              </column>
+            </panel>
+          </if>
+          <if test="{capabilities.windowTools and windowAreaStatus == 'ready'}">
+            <card padding="20" background="surface" radius="lg" border-color="border" label="Window snap">
+              <column gap="8">
+                <text size="heading">Snap the foreground window</text>
+                <text size="sm" foreground="text_muted" wrap="true">Choose a built-in area, then move the current foreground window into it. The target uses the monitor work area and stable monitor identity.</text>
+                <if test="{windowAreaStatus == 'loading'}">
+                  <row gap="8" cross="center">
+                    <spinner />
+                    <text size="sm">Loading snap areas…</text>
+                  </row>
+                </if>
+                <if test="{windowAreaStatus == 'ready'}">
+                  <column gap="6">
+                    <text size="sm" foreground="text_muted">Built-in areas</text>
+                    <for each="windowAreas" key="id" as="windowArea">
+                      <button selected="{selectedWindowAreaId == windowArea.id}" on-press="select_window_area:{windowArea.id}">{windowArea.monitorName} · {windowArea.name}</button>
+                    </for>
+                    <row gap="8" main="end">
+                      <button variant="primary" disabled="{snappingWindow}" on-press="snap_window">{windowSnapLabel}</button>
+                    </row>
+                    <if test="{windowActionStatus == 'failed'}">
+                      <text size="sm" foreground="destructive" wrap="true">{lastError}</text>
+                    </if>
+                  </column>
+                </if>
               </column>
             </card>
           </if>
-          <if test="{not capabilities.windowTools}">
+          <if test="{not capabilities.windowTools and windowAreaStatus == 'empty'}">
             <panel padding="24" background="surface" radius="lg" border-color="border" label="Window tools unavailable">
               <column gap="8">
                 <text><span weight="bold">Window tools are unavailable</span></text>

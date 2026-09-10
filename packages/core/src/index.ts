@@ -25,12 +25,19 @@ export {
   InvalidApplyPlan,
   InvalidDisplayMode,
   InvalidDisplayProfile,
+  InvalidEdid,
   InvalidGeometry,
   InvalidMonitorId,
   InvalidMonitorSelector,
   InvalidTopology,
   MonitorNotFound,
 } from "./errors";
+export { EDID_BASE_BLOCK_LENGTH, parseEdidBaseBlock } from "./edid";
+export type {
+  EdidBaseBlock,
+  EdidPhysicalSize,
+  EdidPreferredTiming,
+} from "./edid";
 export {
   makePoint,
   makeRect,
@@ -65,6 +72,29 @@ export type {
   MonitorSelectorError,
   ResolveMonitorSelectorOptions,
 } from "./selector";
+export {
+  CursorPointUnavailable,
+  monitorForCursorPoint,
+  planCursorRoute,
+  routeCursorPoint,
+  routeCursorToMonitor,
+} from "./dmt/cursor-routing";
+export type {
+  CursorRoutingError,
+  CursorRoutingResult,
+} from "./dmt/cursor-routing";
+export {
+  makeSystemSnapAreaGroups,
+  makeSystemSnapAreasForTopology,
+  usableMonitorArea,
+} from "./dmt/snap-areas";
+export type { SnapArea, SnapAreaGroup } from "./dmt/snap-areas";
+export { planWindowSnap, snapWindowToArea } from "./dmt/window-placement";
+export type {
+  WindowPlacementPlan,
+  WindowPlacementOperation,
+  WindowState,
+} from "./dmt/window-placement";
 export {
   BRIGHTNESS_MAXIMUM,
   BRIGHTNESS_MINIMUM,

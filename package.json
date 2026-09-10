@@ -18,10 +18,13 @@
     "ui:dev": "bun run scripts/native-ui-dev.ts",
     "ui:check": "bun run scripts/native-sdk-cli.ts check apps/native-ui",
     "ui:test": "bun run scripts/native-sdk-cli.ts test apps/native-ui",
+    "panel:build": "bun run scripts/cargo-msvc.ts build --manifest-path apps/slint-ui/Cargo.toml --target-dir dist/slint-panel",
+    "panel:dev": "bun run scripts/cargo-msvc.ts run --manifest-path apps/slint-ui/Cargo.toml --target-dir dist/slint-panel",
+    "panel:test": "bun run scripts/cargo-msvc.ts test --manifest-path apps/slint-ui/Cargo.toml --target-dir dist/slint-panel",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
-    "lint": "ultracite check apps/desktop packages",
-    "check": "ultracite check apps/desktop packages",
+    "lint": "ultracite check",
+    "check": "ultracite check",
     "fix": "ultracite fix",
     "prepare": "lefthook install"
   },
@@ -40,7 +43,7 @@
     "oxlint": "^1.82.0",
     "oxlint-plugin-react-doctor": "^0.9.13",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "ultracite": "7.11.0",
+    "ultracite": "7.11.1",
     "vitest": "^5.0.0"
   }
 }

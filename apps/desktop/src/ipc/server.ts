@@ -102,6 +102,12 @@ const applicationError = (error: unknown): IpcError => {
         errorDetails([["path", stringField(error, "path")]])
       );
     }
+    case "InvalidMonitorId": {
+      return makeError(
+        "INVALID_PARAMS",
+        stringField(error, "reason") ?? "Monitor id is invalid"
+      );
+    }
     case "InvalidTopology": {
       return makeError(
         "INVALID_TOPOLOGY",
@@ -151,6 +157,12 @@ const dispatch = (
     case "capabilities.get": {
       return Effect.succeed(application.capabilitySnapshot());
     }
+    case "color.list": {
+      return application.listColor();
+    }
+    case "color.set": {
+      return application.setColor(request.params);
+    }
     case "monitors.list": {
       return application.discoverMonitors();
     }
@@ -176,6 +188,12 @@ const dispatch = (
     }
     case "profiles.applyPreview": {
       return application.previewProfileApply(request.params.name);
+    }
+    case "window.list": {
+      return application.listWindowAreas();
+    }
+    case "window.snap": {
+      return application.snapForegroundWindow(request.params);
     }
     default: {
       return impossible();

@@ -1,21 +1,25 @@
 /// <reference types="bun-types" />
 /* oxlint-disable anti-slop/no-runtime-typeof -- Native failures are untrusted FFI boundary values. */
 
-import type { FFIType, JSCallback, Pointer, ptr, read } from "bun:ffi";
+import type { dlopen, FFIType, JSCallback, Pointer, ptr, read } from "bun:ffi";
 
 import type {
   ApplyPlan,
   DisplayProfile,
   DisplayProfileMonitor,
+  EdidBaseBlock,
   MonitorId,
   MonitorSnapshot,
   MonitorTopology,
 } from "@native-monitor-tools/core";
 import {
+  displayModesEqual,
   makeDisplayMode,
   makeMonitorSnapshot,
   makeMonitorTopology,
   monitorIdFromIdentity,
+  parseEdidBaseBlock,
+  rectsEqual,
 } from "@native-monitor-tools/core";
 import { Cause, Effect, Exit, Result } from "effect";
 
@@ -36,6 +40,7 @@ const DM_BITSPERPEL = 262_144;
 const DM_PELSWIDTH = 524_288;
 const DM_PELSHEIGHT = 1_048_576;
 const DM_DISPLAYFREQUENCY = 4_194_304;
+const EDD_GET_DEVICE_INTERFACE_NAME = 1;
 const CDS_UPDATEREGISTRY = 0x1;
 const CDS_SET_PRIMARY = 0x10;
 const CDS_NORESET = 268_435_456;
@@ -58,6 +63,11 @@ const GAMMA_CHANNEL_LENGTH = 256;
 const GAMMA_RAMP_BYTE_LENGTH = GAMMA_CHANNEL_LENGTH * 3 * 2;
 const PHYSICAL_MONITOR_SIZE = 264;
 const MAX_PHYSICAL_MONITORS = 64;
+const EDID_REGISTRY_MAX_BYTES = 32 * 1024;
+const HKEY_LOCAL_MACHINE = 0x80_00_00_02n;
+const KEY_READ = 131_097;
+const REG_BINARY = 3;
+const ERROR_SUCCESS = 0;
 
 type NativePointer = Pointer | bigint;
 
@@ -84,6 +94,8 @@ export interface WindowsDisplay {
   readonly snapshot: MonitorSnapshot;
   /** The stable identity material used by the adapter. */
   readonly identity: WindowsDisplayIdentity;
+  /** Optional EDID metadata read from the Windows monitor registry. */
+  readonly edid?: EdidBaseBlock;
 }
 
 /** The result of one single-shot Windows monitor enumeration. */
@@ -92,6 +104,12 @@ export interface WindowsDisplayDiscovery {
   readonly topology: MonitorTopology;
   /** Display records retaining identity metadata but no native handles. */
   readonly displays: readonly WindowsDisplay[];
+}
+
+interface WindowsDisplayDiscoveryWithRecords {
+  readonly topology: MonitorTopology;
+  readonly displays: readonly WindowsDisplay[];
+  readonly recordsById: ReadonlyMap<MonitorId, NativeMonitorRecord>;
 }
 
 /** A 256-entry, 16-bit-per-channel display gamma ramp. */
@@ -204,6 +222,7 @@ interface NativeDisplayRecord {
     readonly bitsPerPixel: number;
   };
   readonly isPrimary: boolean;
+  readonly edid?: EdidBaseBlock;
 }
 
 interface NativeMonitorRecord {
@@ -211,6 +230,7 @@ interface NativeMonitorRecord {
   readonly deviceName: string;
   readonly identity: WindowsDisplayIdentity;
   readonly snapshot: MonitorSnapshot;
+  readonly edid?: EdidBaseBlock;
 }
 
 interface User32Symbols {
@@ -296,6 +316,32 @@ interface Dxva2Symbols {
     monitor: NativePointer,
     value: number
   ) => number;
+}
+
+interface RegistrySymbols {
+  readonly RegCloseKey: (key: NativePointer) => number;
+  readonly RegOpenKeyExW: (
+    root: NativePointer,
+    subKey: Pointer,
+    options: number,
+    desiredAccess: number,
+    result: Pointer
+  ) => number;
+  readonly RegQueryValueExW: (
+    key: NativePointer,
+    valueName: Pointer,
+    reserved: Pointer | null,
+    valueType: Pointer,
+    data: Pointer | null,
+    dataSize: Pointer
+  ) => number;
+}
+
+interface BunFfiModule {
+  readonly dlopen: typeof dlopen;
+  readonly FFIType: typeof FFIType;
+  readonly ptr: typeof ptr;
+  readonly read: typeof read;
 }
 
 const isWindows = (): boolean => process.platform === "win32";
@@ -454,6 +500,27 @@ const makeUser32Symbols = (ffiType: typeof FFIType) => ({
   },
 });
 
+const readMonitorInterfacePath = (
+  symbols: User32Symbols,
+  ffi: BunFfi,
+  deviceName: Uint16Array
+): string => {
+  const displayDevice = new Uint8Array(DISPLAY_DEVICE_SIZE);
+  const displayDeviceView = new DataView(displayDevice.buffer);
+  displayDeviceView.setUint32(0, DISPLAY_DEVICE_SIZE, true);
+  if (
+    symbols.EnumDisplayDevicesW(
+      ffi.ptr(deviceName),
+      0,
+      ffi.ptr(displayDevice),
+      EDD_GET_DEVICE_INTERFACE_NAME
+    ) === 0
+  ) {
+    return "";
+  }
+  return readWideString(displayDeviceView, 328, DISPLAY_DEVICE_ID_LENGTH);
+};
+
 const makeGdi32Symbols = (ffiType: typeof FFIType) => ({
   CreateDCW: {
     args: [ffiType.ptr, ffiType.ptr, ffiType.ptr, ffiType.ptr] as const,
@@ -504,6 +571,154 @@ const makeDxva2Symbols = (ffiType: typeof FFIType) => ({
   },
 });
 
+const makeRegistrySymbols = (ffiType: typeof FFIType) => ({
+  RegCloseKey: {
+    args: [ffiType.ptr] as const,
+    returns: ffiType.int32_t,
+  },
+  RegOpenKeyExW: {
+    args: [
+      ffiType.ptr,
+      ffiType.ptr,
+      ffiType.uint32_t,
+      ffiType.uint32_t,
+      ffiType.ptr,
+    ] as const,
+    returns: ffiType.int32_t,
+  },
+  RegQueryValueExW: {
+    args: [
+      ffiType.ptr,
+      ffiType.ptr,
+      ffiType.ptr,
+      ffiType.ptr,
+      ffiType.ptr,
+      ffiType.ptr,
+    ] as const,
+    returns: ffiType.int32_t,
+  },
+});
+
+const registryPathSegment = (value: string): boolean => {
+  if (value.length === 0 || value.length > 256) {
+    return false;
+  }
+  if (value === "." || value === ".." || value.includes("\0")) {
+    return false;
+  }
+  return !value.includes("\\") && !value.includes("/");
+};
+
+/** Build the registry subkey used by a Windows monitor interface path. */
+export const edidRegistrySubkeyForInterfacePath = (
+  devicePath: string
+): string | undefined => {
+  const parts = devicePath.trim().split("#");
+  if (parts.length < 3) {
+    return undefined;
+  }
+  const [prefix, vendorProduct, instance] = parts;
+  if (prefix === undefined || prefix.toLocaleUpperCase() !== "\\\\?\\DISPLAY") {
+    return undefined;
+  }
+  if (vendorProduct === undefined || !registryPathSegment(vendorProduct)) {
+    return undefined;
+  }
+  if (instance === undefined || !registryPathSegment(instance)) {
+    return undefined;
+  }
+  return `SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\${vendorProduct}\\${instance}\\Device Parameters`;
+};
+
+const readRegistryEdid = (
+  ffi: BunFfiModule,
+  devicePath: string
+): EdidBaseBlock | undefined => {
+  const subKey = edidRegistrySubkeyForInterfacePath(devicePath);
+  if (subKey === undefined) {
+    return undefined;
+  }
+
+  try {
+    const advapi32 = ffi.dlopen(
+      "advapi32.dll",
+      makeRegistrySymbols(ffi.FFIType)
+    );
+    try {
+      // SAFETY: These signatures match the handwritten descriptors immediately above and the Windows registry ABI.
+      /* oxlint-disable-next-line anti-slop/no-chained-type-assertions -- Bun's generic descriptor inference cannot express the Windows ABI. */
+      const symbols = advapi32.symbols as unknown as RegistrySymbols;
+      const keyBuffer = new Uint8Array(8);
+      const openResult = symbols.RegOpenKeyExW(
+        HKEY_LOCAL_MACHINE,
+        ffi.ptr(wideString(subKey)),
+        0,
+        KEY_READ,
+        ffi.ptr(keyBuffer)
+      );
+      if (openResult !== ERROR_SUCCESS) {
+        return undefined;
+      }
+
+      const key = ffi.read.u64(ffi.ptr(keyBuffer));
+      if (key === 0n) {
+        return undefined;
+      }
+      try {
+        const valueName = wideString("EDID");
+        const typeBuffer = new Uint8Array(4);
+        const sizeBuffer = new Uint8Array(4);
+        const sizeResult = symbols.RegQueryValueExW(
+          key,
+          ffi.ptr(valueName),
+          null,
+          ffi.ptr(typeBuffer),
+          null,
+          ffi.ptr(sizeBuffer)
+        );
+        const valueType = new DataView(typeBuffer.buffer).getUint32(0, true);
+        const valueSize = new DataView(sizeBuffer.buffer).getUint32(0, true);
+        if (
+          sizeResult !== ERROR_SUCCESS ||
+          valueType !== REG_BINARY ||
+          valueSize < 128 ||
+          valueSize > EDID_REGISTRY_MAX_BYTES
+        ) {
+          return undefined;
+        }
+
+        const valueBuffer = new Uint8Array(valueSize);
+        const readSizeBuffer = new Uint8Array(sizeBuffer);
+        const readResult = symbols.RegQueryValueExW(
+          key,
+          ffi.ptr(valueName),
+          null,
+          ffi.ptr(typeBuffer),
+          ffi.ptr(valueBuffer),
+          ffi.ptr(readSizeBuffer)
+        );
+        if (readResult !== ERROR_SUCCESS) {
+          return undefined;
+        }
+        const readSize = new DataView(readSizeBuffer.buffer).getUint32(0, true);
+        if (readSize < 128 || readSize > valueBuffer.byteLength) {
+          return undefined;
+        }
+        const parsed = runCore(
+          parseEdidBaseBlock(valueBuffer.slice(0, readSize))
+        );
+        return parsed._tag === "Success" ? parsed.value : undefined;
+      } finally {
+        symbols.RegCloseKey(key);
+      }
+    } finally {
+      advapi32.close();
+    }
+  } catch {
+    return undefined;
+  }
+};
+
 const readExternalLevel = (
   readLevel: Dxva2Symbols["GetMonitorBrightness"],
   monitor: NativePointer,
@@ -527,7 +742,7 @@ const readExternalLevel = (
   const minimum = new DataView(minimumBuffer.buffer).getUint32(0, true);
   const current = new DataView(currentBuffer.buffer).getUint32(0, true);
   const maximum = new DataView(maximumBuffer.buffer).getUint32(0, true);
-  if (minimum > current || current > maximum) {
+  if (minimum > current || current > maximum || maximum > 65_535) {
     return {
       _tag: "Unsupported",
       reason: "The physical monitor returned an invalid VCP range",
@@ -608,6 +823,38 @@ const collectDisplayChangeRequests = (
   return changes;
 };
 
+/**
+ * Compare the live display state needed to safely apply a plan.
+ *
+ * This remains a pure local helper because the native mutation path has no
+ * injectable FFI seam; the comparison itself is therefore kept small and
+ * side-effect free rather than adding native integration coverage.
+ */
+const topologiesMatchForApply = (
+  expected: MonitorTopology,
+  actual: MonitorTopology
+): boolean => {
+  if (
+    expected.primaryId !== actual.primaryId ||
+    expected.monitors.length !== actual.monitors.length
+  ) {
+    return false;
+  }
+
+  const actualById = new Map(
+    actual.monitors.map((monitor) => [monitor.id, monitor])
+  );
+  return expected.monitors.every((expectedMonitor) => {
+    const actualMonitor = actualById.get(expectedMonitor.id);
+    return (
+      actualMonitor !== undefined &&
+      rectsEqual(expectedMonitor.bounds, actualMonitor.bounds) &&
+      displayModesEqual(expectedMonitor.mode, actualMonitor.mode) &&
+      expectedMonitor.isPrimary === actualMonitor.isPrimary
+    );
+  });
+};
+
 const isNativeInt32 = (value: number): boolean =>
   Number.isInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647;
 
@@ -671,6 +918,12 @@ const makeDisplayChangeMode = (
   return buffer;
 };
 
+/** The result classification used for one ChangeDisplaySettingsExW call. */
+export type WindowsDisplayChangeOutcome =
+  | { readonly _tag: "Applied" }
+  | { readonly _tag: "RestartRequired" }
+  | { readonly _tag: "Failed"; readonly reason: string };
+
 const displayChangeReason = (code: number): string => {
   switch (code) {
     case DISP_CHANGE_FAILED: {
@@ -694,8 +947,37 @@ const displayChangeReason = (code: number): string => {
     case DISP_CHANGE_INCOMPLETE: {
       return "The display change was incomplete";
     }
+    case DISP_CHANGE_RESTART: {
+      return "Windows requires a restart before the display change takes effect";
+    }
     default: {
       return `ChangeDisplaySettingsExW returned ${code}`;
+    }
+  }
+};
+
+/**
+ * Classify a ChangeDisplaySettingsExW return code without performing a native call.
+ *
+ * `DISP_CHANGE_RESTART` means Windows stored the settings but cannot apply
+ * them dynamically. It is distinct from a native failure, while still being
+ * unsafe to report as an applied display plan.
+ *
+ * @param code - The return code from ChangeDisplaySettingsExW.
+ * @returns The typed outcome for the native call.
+ */
+export const classifyDisplayChangeResult = (
+  code: number
+): WindowsDisplayChangeOutcome => {
+  switch (code) {
+    case DISP_CHANGE_SUCCESSFUL: {
+      return { _tag: "Applied" };
+    }
+    case DISP_CHANGE_RESTART: {
+      return { _tag: "RestartRequired" };
+    }
+    default: {
+      return { _tag: "Failed", reason: displayChangeReason(code) };
     }
   }
 };
@@ -738,21 +1020,38 @@ const buildDisplay = (
       id: idResult.value,
       isPrimary: native.isPrimary,
       mode: modeResult.value,
-      name: native.displayName,
+      name: native.edid?.displayName ?? native.displayName,
       workArea: native.workArea,
     })
   );
   if (snapshotResult._tag === "Failure") {
     return snapshotResult;
   }
+  const record = {
+    deviceName: native.deviceName,
+    hMonitor: native.hMonitor,
+    identity,
+    snapshot: snapshotResult.value,
+  };
+  if (native.edid !== undefined) {
+    return { _tag: "Success", value: { ...record, edid: native.edid } };
+  }
   return {
     _tag: "Success",
-    value: {
-      deviceName: native.deviceName,
-      hMonitor: native.hMonitor,
-      identity,
-      snapshot: snapshotResult.value,
-    },
+    value: record,
+  };
+};
+
+const windowsDisplayFromRecord = (
+  record: NativeMonitorRecord
+): WindowsDisplay => {
+  if (record.edid === undefined) {
+    return { identity: record.identity, snapshot: record.snapshot };
+  }
+  return {
+    edid: record.edid,
+    identity: record.identity,
+    snapshot: record.snapshot,
   };
 };
 
@@ -851,6 +1150,11 @@ const discoverNative = async (): Promise<
         const physicalDeviceName = hasPhysicalIdentity
           ? readWideString(displayDeviceView, 68, DISPLAY_DEVICE_STRING_LENGTH)
           : "";
+        const interfacePath = readMonitorInterfacePath(
+          symbols,
+          ffi,
+          deviceNameBuffer
+        );
 
         const modeBuffer = new Uint8Array(DEVMODE_SIZE);
         const modeView = new DataView(modeBuffer.buffer);
@@ -890,7 +1194,14 @@ const discoverNative = async (): Promise<
           mode,
           workArea,
         };
-        records.push({ ...record, devicePath });
+        records.push({
+          ...record,
+          devicePath,
+          edid:
+            interfacePath.length === 0
+              ? undefined
+              : readRegistryEdid(ffi, interfacePath),
+        });
       }
       return success(records);
     } finally {
@@ -993,13 +1304,10 @@ const withPhysicalMonitor = async <T>(
 const findMonitorRecord = async (
   monitorId: MonitorId,
   operation: WindowsPlatformOperation,
-  recordsById: Map<MonitorId, NativeMonitorRecord>,
-  discover: () => Promise<WindowsPlatformResult<WindowsDisplayDiscovery>>
+  discover: () => Promise<
+    WindowsPlatformResult<WindowsDisplayDiscoveryWithRecords>
+  >
 ): Promise<WindowsPlatformResult<NativeMonitorRecord>> => {
-  const cached = recordsById.get(monitorId);
-  if (cached !== undefined) {
-    return success(cached);
-  }
   const discovery = await discover();
   if (discovery._tag === "Unsupported") {
     return unsupported(operation, discovery.reason);
@@ -1007,7 +1315,7 @@ const findMonitorRecord = async (
   if (discovery._tag === "Error") {
     return failure(operation, discovery.reason);
   }
-  const record = recordsById.get(monitorId);
+  const record = discovery.value.recordsById.get(monitorId);
   if (record === undefined) {
     return failure(
       operation,
@@ -1021,17 +1329,15 @@ const findMonitorRecord = async (
  * Create a direct Bun FFI Windows display adapter.
  *
  * Native libraries are loaded only when an operation runs on Windows. The
- * adapter retains no HDC, physical-monitor handle, callback, or FFI buffer
- * across an operation; the only retained state is the latest ID-to-device
- * lookup needed to route gamma and DXVA2 requests.
+ * adapter retains no HDC, physical-monitor handle, callback, FFI buffer, or
+ * ID-to-device lookup across operations. Each discovery-dependent operation
+ * keeps its own discovery context until that operation completes.
  *
  * @returns A typed port for discovery, gamma, brightness, and contrast operations.
  */
 export const createWindowsDisplayPort = (): WindowsDisplayPort => {
-  const recordsById = new Map<MonitorId, NativeMonitorRecord>();
-
-  const discover = async (): Promise<
-    WindowsPlatformResult<WindowsDisplayDiscovery>
+  const discoverWithRecords = async (): Promise<
+    WindowsPlatformResult<WindowsDisplayDiscoveryWithRecords>
   > => {
     if (!isWindows()) {
       return unsupportedOffWindows("discover");
@@ -1059,16 +1365,28 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
       return failure("discover", topologyResult.reason);
     }
 
-    recordsById.clear();
-    for (const record of records) {
-      recordsById.set(record.snapshot.id, record);
+    return success({
+      displays: records.map(windowsDisplayFromRecord),
+      recordsById: new Map(
+        records.map((record) => [record.snapshot.id, record])
+      ),
+      topology: topologyResult.value,
+    });
+  };
+
+  const discover = async (): Promise<
+    WindowsPlatformResult<WindowsDisplayDiscovery>
+  > => {
+    const result = await discoverWithRecords();
+    if (result._tag === "Unsupported") {
+      return result;
+    }
+    if (result._tag === "Error") {
+      return result;
     }
     return success({
-      displays: records.map((record) => ({
-        identity: record.identity,
-        snapshot: record.snapshot,
-      })),
-      topology: topologyResult.value,
+      displays: result.value.displays,
+      topology: result.value.topology,
     });
   };
 
@@ -1082,8 +1400,7 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
     const recordResult = await findMonitorRecord(
       monitorId,
       operation,
-      recordsById,
-      discover
+      discoverWithRecords
     );
     if (recordResult._tag !== "Success") {
       return recordResult;
@@ -1145,8 +1462,7 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
     const recordResult = await findMonitorRecord(
       monitorId,
       operation,
-      recordsById,
-      discover
+      discoverWithRecords
     );
     if (recordResult._tag !== "Success") {
       return recordResult;
@@ -1204,8 +1520,7 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
     const recordResult = await findMonitorRecord(
       monitorId,
       operation,
-      recordsById,
-      discover
+      discoverWithRecords
     );
     if (recordResult._tag !== "Success") {
       return recordResult;
@@ -1250,8 +1565,7 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
     const recordResult = await findMonitorRecord(
       monitorId,
       operation,
-      recordsById,
-      discover
+      discoverWithRecords
     );
     if (recordResult._tag !== "Success") {
       return recordResult;
@@ -1311,7 +1625,7 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
     );
 
   const applyDisplayPlan = async (
-    _current: MonitorTopology,
+    current: MonitorTopology,
     desired: DisplayProfile,
     plan: ApplyPlan
   ): Promise<WindowsPlatformResult<void>> => {
@@ -1327,12 +1641,18 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
       return success(undefined);
     }
 
-    const discovery = await discover();
+    const discovery = await discoverWithRecords();
     if (discovery._tag === "Unsupported") {
       return unsupported(operation, discovery.reason);
     }
     if (discovery._tag === "Error") {
       return failure(operation, discovery.reason);
+    }
+    if (!topologiesMatchForApply(current, discovery.value.topology)) {
+      return failure(
+        operation,
+        "The live display topology no longer matches the topology used to generate the plan"
+      );
     }
 
     const desiredById = new Map(
@@ -1345,8 +1665,9 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
       try {
         // SAFETY: These signatures match the handwritten descriptors immediately above and the Windows C ABI.
         const symbols = user32.symbols as User32Symbols;
+        let restartRequired = false;
         for (const [monitorId, change] of changes) {
-          const record = recordsById.get(monitorId);
+          const record = discovery.value.recordsById.get(monitorId);
           const target = desiredById.get(monitorId);
           if (record === undefined || target === undefined) {
             return failure(
@@ -1363,33 +1684,32 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
           if (change.primary) {
             flags += CDS_SET_PRIMARY;
           }
-          const result = symbols.ChangeDisplaySettingsExW(
-            ffi.ptr(deviceName),
-            ffi.ptr(mode),
-            null,
-            flags,
-            null
+          const result = classifyDisplayChangeResult(
+            symbols.ChangeDisplaySettingsExW(
+              ffi.ptr(deviceName),
+              ffi.ptr(mode),
+              null,
+              flags,
+              null
+            )
           );
-          if (
-            result !== DISP_CHANGE_SUCCESSFUL &&
-            result !== DISP_CHANGE_RESTART
-          ) {
-            return failure(operation, displayChangeReason(result));
+          if (result._tag === "Failed") {
+            return failure(operation, result.reason);
+          }
+          if (result._tag === "RestartRequired") {
+            // The settings were staged successfully; finish staging every device before the documented commit call.
+            restartRequired = true;
           }
         }
 
-        const commit = symbols.ChangeDisplaySettingsExW(
-          null,
-          null,
-          null,
-          0,
-          null
+        const commit = classifyDisplayChangeResult(
+          symbols.ChangeDisplaySettingsExW(null, null, null, 0, null)
         );
-        if (
-          commit !== DISP_CHANGE_SUCCESSFUL &&
-          commit !== DISP_CHANGE_RESTART
-        ) {
-          return failure(operation, displayChangeReason(commit));
+        if (commit._tag === "Failed") {
+          return failure(operation, commit.reason);
+        }
+        if (restartRequired || commit._tag === "RestartRequired") {
+          return failure(operation, displayChangeReason(DISP_CHANGE_RESTART));
         }
         // oxlint-disable-next-line unicorn/no-useless-undefined -- The success payload is intentionally void.
         return success(undefined);

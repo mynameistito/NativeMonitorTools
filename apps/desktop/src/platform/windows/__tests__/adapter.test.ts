@@ -2,9 +2,45 @@ import { monitorIdFromIdentity } from "@native-monitor-tools/core";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { createWindowsDisplayPort } from "../index";
+import {
+  classifyDisplayChangeResult,
+  createWindowsDisplayPort,
+  edidRegistrySubkeyForInterfacePath,
+} from "../index";
 
 describe("Windows display adapter", () => {
+  it("keeps restart-required display results distinct from applied results", () => {
+    expect(classifyDisplayChangeResult(0)).toEqual({ _tag: "Applied" });
+    expect(classifyDisplayChangeResult(1)).toEqual({
+      _tag: "RestartRequired",
+    });
+    expect(classifyDisplayChangeResult(-2)).toEqual({
+      _tag: "Failed",
+      reason: "The requested display mode is unsupported",
+    });
+  });
+
+  it("maps PNP monitor identities to their EDID registry subkeys", () => {
+    expect(
+      edidRegistrySubkeyForInterfacePath(
+        "\\\\?\\DISPLAY#DEL4098#5&3b50ae31&0&UID4356#{GUID}"
+      )
+    ).toBe(
+      "SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\DEL4098\\5&3b50ae31&0&UID4356\\Device Parameters"
+    );
+    expect(
+      edidRegistrySubkeyForInterfacePath("MONITOR\\DEL4098\\5&4356")
+    ).toBeUndefined();
+    expect(
+      edidRegistrySubkeyForInterfacePath("\\\\?\\DISPLAY#..#instance#{GUID}")
+    ).toBeUndefined();
+    expect(
+      edidRegistrySubkeyForInterfacePath(
+        "\\\\?\\DISPLAY#DEL4098#bad\0key#{GUID}"
+      )
+    ).toBeUndefined();
+  });
+
   it("returns explicit unsupported results off Windows without loading FFI", async () => {
     if (process.platform === "win32") {
       return;

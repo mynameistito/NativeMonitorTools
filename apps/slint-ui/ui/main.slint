@@ -1,0 +1,348 @@
+import { Button, ScrollView } from "std-widgets.slint";
+
+component SectionCard inherits Rectangle {
+    in property <string> heading;
+    in property <string> eyebrow;
+    in property <string> status;
+    in property <[string]> rows;
+    in property <bool> loading: false;
+    in property <bool> action-enabled: true;
+    in property <string> action-label: "Refresh";
+    callback action-clicked();
+
+    background: #111a2a;
+    border-color: #253653;
+    border-width: 1px;
+    border-radius: 12px;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.eyebrow;
+                color: #6d8bb5;
+                font-size: 10px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: root.status;
+                color: #8ea4c4;
+                font-size: 11px;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+            Text {
+                text: root.heading;
+                color: #eef5ff;
+                font-size: 19px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                text: root.action-label;
+                enabled: root.action-enabled && !root.loading;
+                clicked => { root.action-clicked(); }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: #20304a;
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: 7px;
+                for row in root.rows: Rectangle {
+                    background: #17243a;
+                    border-radius: 7px;
+                    min-height: 36px;
+                    HorizontalLayout {
+                        padding-left: 11px;
+                        padding-right: 11px;
+                        Text {
+                            text: row;
+                            color: #c7d5ea;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component ProfileRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> action-enabled: false;
+    callback preview-clicked();
+
+    background: #17243a;
+    border-radius: 7px;
+    min-height: 42px;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 8px;
+        Text {
+            text: root.label;
+            color: #dce8f8;
+            font-size: 13px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Button {
+            text: "Preview plan";
+            enabled: root.action-enabled;
+            clicked => { root.preview-clicked(); }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Native Monitor Tools";
+    width: 1040px;
+    height: 760px;
+    background: #0b111d;
+
+    in property <string> connection-status: "Connecting to backend";
+    in property <string> monitor-status: "Waiting for discovery";
+    in property <string> profile-status: "Waiting for profiles";
+    in property <string> color-status: "Read-only controls";
+    in property <string> window-status: "Read-only tools";
+    in property <string> error-message: "";
+    in property <[string]> monitor-rows: [];
+    in property <[string]> profile-rows: [];
+    in property <[string]> color-rows: [];
+    in property <[string]> window-rows: [];
+    in property <bool> loading: true;
+    in property <bool> has-error: false;
+    in property <bool> profile-preview-enabled: false;
+    in property <bool> color-action-enabled: false;
+    in property <bool> window-action-enabled: false;
+
+    callback refresh-clicked();
+    callback color-refresh-clicked();
+    callback window-refresh-clicked();
+    callback profile-preview-clicked(string);
+
+    Rectangle {
+        background: root.background;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            HorizontalLayout {
+                spacing: 14px;
+                Rectangle {
+                    width: 42px;
+                    height: 42px;
+                    background: #61d5c6;
+                    border-radius: 12px;
+                    Text {
+                        text: "N";
+                        color: #08131e;
+                        font-size: 23px;
+                        font-weight: 800;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                VerticalLayout {
+                    spacing: 2px;
+                    Text {
+                        text: "NATIVE MONITOR TOOLS";
+                        color: #f0f6ff;
+                        font-size: 22px;
+                        font-weight: 800;
+                    }
+                    Text {
+                        text: "Native control panel  /  safe preview surface";
+                        color: #7f97ba;
+                        font-size: 12px;
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: root.loading ? "Refreshing…" : "Refresh all";
+                    enabled: !root.loading;
+                    clicked => { root.refresh-clicked(); }
+                }
+            }
+
+            Rectangle {
+                height: 38px;
+                background: root.has-error ? #321d2a : #122638;
+                border-color: root.has-error ? #b45b70 : #244c5e;
+                border-width: 1px;
+                border-radius: 9px;
+                HorizontalLayout {
+                    padding-left: 13px;
+                    padding-right: 13px;
+                    spacing: 8px;
+                    Text {
+                        text: root.has-error ? "!" : "●";
+                        color: root.has-error ? #ff9eae : #61d5c6;
+                        font-size: 14px;
+                        font-weight: 800;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.has-error ? root.error-message : root.connection-status;
+                        color: root.has-error ? #ffd5dd : #b8e8e3;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: root.loading ? "SYNC" : "READY";
+                        color: root.loading ? #e4c17d : #61d5c6;
+                        font-size: 10px;
+                        font-weight: 800;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: 14px;
+
+                    HorizontalLayout {
+                        spacing: 14px;
+                        vertical-stretch: 1;
+
+                        SectionCard {
+                            horizontal-stretch: 1;
+                            min-width: 360px;
+                            heading: "Monitors";
+                            eyebrow: "DISCOVERY";
+                            status: root.monitor-status;
+                            rows: root.monitor-rows;
+                            loading: root.loading;
+                            action-enabled: true;
+                            action-clicked => { root.refresh-clicked(); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: #111a2a;
+                            border-color: #253653;
+                            border-width: 1px;
+                            border-radius: 12px;
+                            VerticalLayout {
+                                padding: 16px;
+                                spacing: 10px;
+                                Text {
+                                    text: "PROFILES";
+                                    color: #6d8bb5;
+                                    font-size: 10px;
+                                    font-weight: 700;
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Text {
+                                        text: "Saved profiles";
+                                        color: #eef5ff;
+                                        font-size: 19px;
+                                        font-weight: 700;
+                                        vertical-alignment: center;
+                                    }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    Text {
+                                        text: root.profile-status;
+                                        color: #8ea4c4;
+                                        font-size: 11px;
+                                        vertical-alignment: center;
+                                        horizontal-alignment: right;
+                                    }
+                                }
+                                Rectangle { height: 1px; background: #20304a; }
+                                ScrollView {
+                                    vertical-stretch: 1;
+                                    VerticalLayout {
+                                        spacing: 7px;
+                                        for profile in root.profile-rows: ProfileRow {
+                                            label: profile;
+                                            action-enabled: root.profile-preview-enabled && !root.loading;
+                                            preview-clicked => { root.profile-preview-clicked(profile); }
+                                        }
+                                    }
+                                }
+                                Text {
+                                    text: "Preview computes a dry-run plan only; it never applies display changes.";
+                                    color: #8295b1;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 14px;
+                        SectionCard {
+                            horizontal-stretch: 1;
+                            min-width: 360px;
+                            heading: "Color";
+                            eyebrow: "DISPLAY CONTROLS";
+                            status: root.color-status;
+                            rows: root.color-rows;
+                            loading: root.loading;
+                            action-enabled: root.color-action-enabled;
+                            action-label: "Read controls";
+                            action-clicked => { root.color-refresh-clicked(); }
+                        }
+                        SectionCard {
+                            horizontal-stretch: 1;
+                            min-width: 360px;
+                            heading: "Window tools";
+                            eyebrow: "FOREGROUND WINDOW";
+                            status: root.window-status;
+                            rows: root.window-rows;
+                            loading: root.loading;
+                            action-enabled: root.window-action-enabled;
+                            action-label: "Read areas";
+                            action-clicked => { root.window-refresh-clicked(); }
+                        }
+                    }
+
+                    Rectangle {
+                        min-height: 34px;
+                        background: #101a2a;
+                        border-radius: 8px;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            Text {
+                                text: "Safety contract  ·  profile actions are preview-only  ·  color writes and window snaps are intentionally disabled in this slice";
+                                color: #8ea4c4;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -65,3 +65,10 @@ export class InvalidApplyPlan extends Data.TaggedError("InvalidApplyPlan")<{
   readonly reason: string;
   readonly monitorId?: string;
 }> {}
+
+/** An EDID base block is too short or contains malformed encoded data. */
+export class InvalidEdid extends Data.TaggedError("InvalidEdid")<{
+  readonly inputLength: number;
+  readonly reason: string;
+  readonly offset?: number;
+}> {}

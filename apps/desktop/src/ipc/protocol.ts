@@ -1,5 +1,6 @@
 /* oxlint-disable anti-slop/no-unsafe-dictionary-type, anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof -- This module is the explicit untrusted JSON protocol boundary. */
 
+import { GAMMA_MAXIMUM, GAMMA_MINIMUM } from "@native-monitor-tools/core";
 import type {
   ApplyPlan,
   DisplayProfile,
@@ -9,7 +10,12 @@ import { Data } from "effect";
 
 import type {
   NativeUiCapabilitySnapshot,
+  NativeUiColorSetRequest,
+  NativeUiColorState,
   NativeUiSavedProfile,
+  NativeUiWindowArea,
+  NativeUiWindowSnapRequest,
+  NativeUiWindowSnapResult,
 } from "../application/native-ui";
 import type { WindowsDisplayDiscovery } from "../platform/windows";
 
@@ -25,12 +31,16 @@ export const IPC_PROTOCOL_VERSION = 1 as const;
 /** Methods available to a Native SDK UI client. */
 export type IpcMethod =
   | "capabilities.get"
+  | "color.list"
+  | "color.set"
   | "monitors.list"
   | "profiles.list"
   | "profiles.show"
   | "profiles.save"
   | "profiles.diff"
-  | "profiles.applyPreview";
+  | "profiles.applyPreview"
+  | "window.list"
+  | "window.snap";
 
 /** Parameters accepted by a method which does not need request arguments. */
 export type IpcEmptyParams = Readonly<Record<never, never>>;
@@ -38,6 +48,8 @@ export type IpcEmptyParams = Readonly<Record<never, never>>;
 /** Request envelope without the generated protocol version and identifier. */
 export type IpcRequestInput =
   | { readonly method: "capabilities.get"; readonly params?: IpcEmptyParams }
+  | { readonly method: "color.list"; readonly params?: IpcEmptyParams }
+  | { readonly method: "color.set"; readonly params: NativeUiColorSetRequest }
   | { readonly method: "monitors.list"; readonly params?: IpcEmptyParams }
   | { readonly method: "profiles.list"; readonly params?: IpcEmptyParams }
   | {
@@ -59,6 +71,11 @@ export type IpcRequestInput =
   | {
       readonly method: "profiles.applyPreview";
       readonly params: { readonly name: string };
+    }
+  | { readonly method: "window.list"; readonly params?: IpcEmptyParams }
+  | {
+      readonly method: "window.snap";
+      readonly params: NativeUiWindowSnapRequest;
     };
 
 /** A versioned, identified request accepted by the Native SDK UI boundary. */
@@ -70,12 +87,16 @@ export type IpcRequest = IpcRequestInput & {
 /** Result projection for a successful protocol method. */
 export type IpcResult =
   | NativeUiCapabilitySnapshot
+  | NativeUiColorState
+  | readonly NativeUiColorState[]
   | WindowsDisplayDiscovery
   | readonly string[]
   | NativeUiSavedProfile
   | { readonly name: string; readonly profile: DisplayProfile }
   | { readonly diff: TopologyDiff; readonly name: string }
-  | { readonly name: string; readonly plan: ApplyPlan };
+  | { readonly name: string; readonly plan: ApplyPlan }
+  | readonly NativeUiWindowArea[]
+  | NativeUiWindowSnapResult;
 
 /** Stable error codes used in protocol error responses. */
 export type IpcErrorCode =
@@ -154,12 +175,16 @@ export type IpcResponseParseResult =
 /** The method names in protocol declaration order. */
 export const IPC_METHODS: readonly IpcMethod[] = [
   "capabilities.get",
+  "color.list",
+  "color.set",
   "monitors.list",
   "profiles.list",
   "profiles.show",
   "profiles.save",
   "profiles.diff",
   "profiles.applyPreview",
+  "window.list",
+  "window.snap",
 ];
 
 const textEncoder = new TextEncoder();
@@ -242,6 +267,26 @@ const parseEmptyParams = (
   return undefined;
 };
 
+type EmptyParamsMethod =
+  | "capabilities.get"
+  | "color.list"
+  | "monitors.list"
+  | "profiles.list"
+  | "window.list";
+
+const methodUsesEmptyParams = (
+  method: IpcMethod
+): method is EmptyParamsMethod => {
+  if (
+    method === "capabilities.get" ||
+    method === "color.list" ||
+    method === "monitors.list"
+  ) {
+    return true;
+  }
+  return method === "profiles.list" || method === "window.list";
+};
+
 const parseNameParams = (
   id: string,
   value: unknown
@@ -262,6 +307,109 @@ const parseNameParams = (
   return typeof name === "string"
     ? { name }
     : { _tag: "Failure", error: name.error };
+};
+
+const parseColorSetParams = (
+  id: string,
+  value: unknown
+):
+  | { readonly _tag: "Failure"; readonly error: IpcProtocolError }
+  | NativeUiColorSetRequest => {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["control", "monitorId", "value"])
+  ) {
+    return {
+      _tag: "Failure",
+      error: new IpcProtocolError({
+        code: "INVALID_PARAMS",
+        id,
+        reason:
+          "Color parameters must contain only monitorId, control, and value",
+      }),
+    };
+  }
+  const monitorId = parseBoundedString(value.monitorId, "monitorId", id);
+  if (typeof monitorId !== "string") {
+    return { _tag: "Failure", error: monitorId.error };
+  }
+  if (
+    value.control !== "gamma" &&
+    value.control !== "brightness" &&
+    value.control !== "contrast"
+  ) {
+    return {
+      _tag: "Failure",
+      error: new IpcProtocolError({
+        code: "INVALID_PARAMS",
+        id,
+        reason: "Color control must be gamma, brightness, or contrast",
+      }),
+    };
+  }
+  if (typeof value.value !== "number" || !Number.isFinite(value.value)) {
+    return {
+      _tag: "Failure",
+      error: new IpcProtocolError({
+        code: "INVALID_PARAMS",
+        id,
+        reason: "Color value must be a finite number",
+      }),
+    };
+  }
+  if (value.control === "gamma") {
+    if (value.value < GAMMA_MINIMUM || value.value > GAMMA_MAXIMUM) {
+      return {
+        _tag: "Failure",
+        error: new IpcProtocolError({
+          code: "INVALID_PARAMS",
+          id,
+          reason: `Gamma must be between ${GAMMA_MINIMUM} and ${GAMMA_MAXIMUM}`,
+        }),
+      };
+    }
+  } else if (
+    !Number.isInteger(value.value) ||
+    value.value < 0 ||
+    value.value > 65_535
+  ) {
+    return {
+      _tag: "Failure",
+      error: new IpcProtocolError({
+        code: "INVALID_PARAMS",
+        id,
+        reason: "External color values must be integers from 0 through 65535",
+      }),
+    };
+  }
+  return { control: value.control, monitorId, value: value.value };
+};
+
+const parseWindowSnapParams = (
+  id: string,
+  value: unknown
+):
+  | { readonly _tag: "Failure"; readonly error: IpcProtocolError }
+  | NativeUiWindowSnapRequest => {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["areaId", "monitorId"])) {
+    return {
+      _tag: "Failure",
+      error: new IpcProtocolError({
+        code: "INVALID_PARAMS",
+        id,
+        reason: "Window snap parameters must contain only monitorId and areaId",
+      }),
+    };
+  }
+  const monitorId = parseBoundedString(value.monitorId, "monitorId", id);
+  if (typeof monitorId !== "string") {
+    return { _tag: "Failure", error: monitorId.error };
+  }
+  const areaId = parseBoundedString(value.areaId, "areaId", id);
+  if (typeof areaId !== "string") {
+    return { _tag: "Failure", error: areaId.error };
+  }
+  return { areaId, monitorId };
 };
 
 const parseSaveParams = (
@@ -344,11 +492,7 @@ const parseRequestValue = (decoded: unknown): IpcRequestParseResult => {
     );
   }
 
-  if (
-    method === "capabilities.get" ||
-    method === "monitors.list" ||
-    method === "profiles.list"
-  ) {
+  if (methodUsesEmptyParams(method)) {
     const paramsFailure = parseEmptyParams(id, decoded.params);
     if (paramsFailure !== undefined) {
       return paramsFailure;
@@ -356,6 +500,28 @@ const parseRequestValue = (decoded: unknown): IpcRequestParseResult => {
     return {
       _tag: "Success",
       value: { id, method, version: IPC_PROTOCOL_VERSION },
+    };
+  }
+
+  if (method === "color.set") {
+    const params = parseColorSetParams(id, decoded.params);
+    if ("_tag" in params) {
+      return { _tag: "Failure", error: params.error };
+    }
+    return {
+      _tag: "Success",
+      value: { id, method, params, version: IPC_PROTOCOL_VERSION },
+    };
+  }
+
+  if (method === "window.snap") {
+    const params = parseWindowSnapParams(id, decoded.params);
+    if ("_tag" in params) {
+      return { _tag: "Failure", error: params.error };
+    }
+    return {
+      _tag: "Success",
+      value: { id, method, params, version: IPC_PROTOCOL_VERSION },
     };
   }
 

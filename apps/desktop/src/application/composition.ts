@@ -13,6 +13,7 @@ import type {
   WindowsDisplayPort,
   WindowsPlatformResult,
 } from "../platform/windows";
+import { createWindowsWindowPort } from "../platform/windows/window";
 import type { DesktopPaths } from "../storage/configuration";
 import {
   makeJsonProfileStore,
@@ -158,8 +159,8 @@ export const makeDesktopApplicationLayer = (paths: DesktopPaths) => {
  * Compose the Native SDK UI application with profile persistence and the
  * existing Windows monitor discovery adapter.
  *
- * The returned service deliberately does not include a display mutation port;
- * its apply operation is preview-only.
+ * Profile apply remains preview-only; the Native UI service also receives the
+ * Windows color port for its separately validated color operations.
  *
  * @param paths - Resolved application data paths.
  * @param platform - Host platform identifier used for capability reporting.
@@ -181,7 +182,15 @@ export const makeNativeUiApplicationLayer = (
     Effect.gen(function* nativeUiApplicationLayerEffect() {
       const profileStore = yield* ProfileStoreService;
       const runtime = yield* MonitorRuntime;
-      return makeProductionNativeUiApplication(profileStore, runtime, platform);
+      return makeProductionNativeUiApplication(
+        profileStore,
+        runtime,
+        platform,
+        createWindowsWindowPort({
+          excludedProcessIds: [process.pid, process.ppid],
+          platform,
+        })
+      );
     })
   );
   return application.pipe(

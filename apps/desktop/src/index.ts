@@ -58,7 +58,10 @@ if (import.meta.main) {
   void run();
 }
 
-export { createWindowsDisplayPort } from "./platform/windows";
+export {
+  createWindowsDisplayPort,
+  edidRegistrySubkeyForInterfacePath,
+} from "./platform/windows";
 export type {
   BrightnessContrastCapabilities,
   ExternalLevelCapability,
@@ -70,6 +73,22 @@ export type {
   WindowsPlatformOperation,
   WindowsPlatformResult,
 } from "./platform/windows";
+export {
+  createWindowsWindowPort,
+  parseWindowGeometry,
+  parseWindowsNativeRect,
+} from "./platform/windows/window";
+export type {
+  WindowsNativePointer,
+  WindowsNativeRect,
+  WindowsWindowHandle,
+  WindowsWindowNativeApi,
+  WindowsWindowOperation,
+  WindowsWindowPort,
+  WindowsWindowPortOptions,
+  WindowsWindowRect,
+  WindowsWindowResult,
+} from "./platform/windows/window";
 
 export {
   makeNativeUiApplicationLayer,
@@ -85,7 +104,12 @@ export type {
   NativeUiCapability,
   NativeUiCapabilityName,
   NativeUiCapabilitySnapshot,
+  NativeUiColorSetRequest,
+  NativeUiColorState,
   NativeUiSavedProfile,
+  NativeUiWindowArea,
+  NativeUiWindowSnapRequest,
+  NativeUiWindowSnapResult,
 } from "./application";
 export { NativeUiIpcClient } from "./ipc/client";
 export { NativeUiIpcClientError } from "./ipc/client-error";

@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
 
+const BACKEND_TIMEOUT_MS = 30_000;
+
 const hexDigit = (value: number): string => {
   switch (value) {
     case 0: {
@@ -153,9 +155,16 @@ export function request(input: Uint8Array): Uint8Array {
   }
   const result = spawnSync(command, ["--native-ui", frame], {
     encoding: "utf-8",
+    timeout: BACKEND_TIMEOUT_MS,
     windowsHide: true,
   });
   if (result.error !== undefined) {
+    if (result.status === null && result.signal !== null) {
+      throw {
+        kind: "backend_timeout",
+        message: "The desktop backend did not answer before the timeout.",
+      };
+    }
     throw {
       kind: "backend_spawn",
       message: "The desktop backend could not be started.",
