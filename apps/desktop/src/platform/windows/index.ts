@@ -63,13 +63,32 @@ const GAMMA_CHANNEL_LENGTH = 256;
 const GAMMA_RAMP_BYTE_LENGTH = GAMMA_CHANNEL_LENGTH * 3 * 2;
 const PHYSICAL_MONITOR_SIZE = 264;
 const MAX_PHYSICAL_MONITORS = 64;
+const NULL_DISPLAY_CONTEXT_REASON = "CreateDCW returned a null display context";
 const EDID_REGISTRY_MAX_BYTES = 32 * 1024;
 const HKEY_LOCAL_MACHINE = 0x80_00_00_02n;
 const KEY_READ = 131_097;
 const REG_BINARY = 3;
 const ERROR_SUCCESS = 0;
 
-type NativePointer = Pointer | bigint;
+export {
+  createWindowsCursorPort,
+  parseCursorClipRect,
+  parseCursorPoint,
+  parseCursorPosition,
+} from "./cursor";
+export type {
+  WindowsCursorLockLease,
+  WindowsCursorNativeApi,
+  WindowsCursorPoint,
+  WindowsCursorPort,
+  WindowsCursorPortOptions,
+  WindowsCursorRect,
+  WindowsCursorOperation,
+  WindowsCursorResult,
+} from "./cursor";
+
+/** A native Windows handle as represented by Bun FFI. */
+export type WindowsNativePointer = Pointer | bigint;
 
 interface BunFfi {
   readonly ptr: typeof ptr;
@@ -110,6 +129,138 @@ interface WindowsDisplayDiscoveryWithRecords {
   readonly topology: MonitorTopology;
   readonly displays: readonly WindowsDisplay[];
   readonly recordsById: ReadonlyMap<MonitorId, NativeMonitorRecord>;
+}
+
+/** A display rectangle returned by the injected Windows native seam. */
+export interface WindowsNativeRect {
+  /** The desktop x coordinate. */
+  readonly x: number;
+  /** The desktop y coordinate. */
+  readonly y: number;
+  /** The display width in pixels. */
+  readonly width: number;
+  /** The display height in pixels. */
+  readonly height: number;
+}
+
+/** A display mode returned by the injected Windows native seam. */
+export interface WindowsNativeDisplayMode {
+  /** The mode width in pixels. */
+  readonly width: number;
+  /** The mode height in pixels. */
+  readonly height: number;
+  /** The mode refresh rate in hertz. */
+  readonly refreshRate: number;
+  /** The mode color depth in bits per pixel. */
+  readonly bitsPerPixel: number;
+}
+
+/** One raw display record supplied by an injected native implementation. */
+export interface WindowsNativeDisplayRecord {
+  /** The native monitor handle used by DXVA2. */
+  readonly hMonitor: WindowsNativePointer;
+  /** The logical GDI display device name. */
+  readonly deviceName: string;
+  /** The display name reported by Windows when EDID is unavailable. */
+  readonly displayName: string;
+  /** The stable PNP device interface path. */
+  readonly devicePath: string;
+  /** The display bounds in desktop coordinates. */
+  readonly bounds: WindowsNativeRect;
+  /** The usable work area in desktop coordinates. */
+  readonly workArea: WindowsNativeRect;
+  /** The current native display mode. */
+  readonly mode: WindowsNativeDisplayMode;
+  /** Whether Windows reports this display as primary. */
+  readonly isPrimary: boolean;
+  /** Optional EDID metadata already read by the native implementation. */
+  readonly edid?: EdidBaseBlock;
+}
+
+/** The result of reading one native VCP level. */
+export interface WindowsNativeLevelReading {
+  /** Whether the native VCP call succeeded. */
+  readonly succeeded: boolean;
+  /** The minimum supported value. */
+  readonly minimum: number;
+  /** The current value. */
+  readonly current: number;
+  /** The maximum supported value. */
+  readonly maximum: number;
+}
+
+/** A physical-monitor handle and its required DXVA2 cleanup operation. */
+export interface WindowsPhysicalMonitorLease {
+  /** The first physical-monitor handle returned by DXVA2. */
+  readonly monitor: WindowsNativePointer | null;
+  /** Destroy all handles acquired for this lease. */
+  readonly destroy: () => boolean;
+}
+
+/** The pointer-free native surface used by the Windows adapter tests. */
+export interface WindowsDisplayNativeApi {
+  /** Enumerate raw displays without retaining native resources. */
+  readonly discoverDisplays: () => Promise<
+    WindowsPlatformResult<readonly WindowsNativeDisplayRecord[]>
+  >;
+  /** Create a GDI display context for a logical display name. */
+  readonly createDisplayContext: (
+    deviceName: string
+  ) => WindowsNativePointer | null;
+  /** Release a GDI display context. */
+  readonly deleteDisplayContext: (deviceContext: WindowsNativePointer) => void;
+  /** Fill a gamma-ramp buffer with the current display ramp. */
+  readonly getDeviceGammaRamp: (
+    deviceContext: WindowsNativePointer,
+    ramp: Uint8Array
+  ) => boolean;
+  /** Apply a gamma-ramp buffer to a display context. */
+  readonly setDeviceGammaRamp: (
+    deviceContext: WindowsNativePointer,
+    ramp: Uint8Array
+  ) => boolean;
+  /** Read the number of physical monitors behind an HMONITOR. */
+  readonly getPhysicalMonitorCount: (monitor: WindowsNativePointer) => {
+    readonly succeeded: boolean;
+    readonly count: number;
+  };
+  /** Acquire physical-monitor handles and their cleanup operation. */
+  readonly acquirePhysicalMonitors: (
+    monitor: WindowsNativePointer,
+    count: number
+  ) => WindowsPhysicalMonitorLease | null;
+  /** Read the physical-monitor brightness range. */
+  readonly getMonitorBrightness: (
+    monitor: WindowsNativePointer
+  ) => WindowsNativeLevelReading;
+  /** Set the physical-monitor brightness value. */
+  readonly setMonitorBrightness: (
+    monitor: WindowsNativePointer,
+    value: number
+  ) => boolean;
+  /** Read the physical-monitor contrast range. */
+  readonly getMonitorContrast: (
+    monitor: WindowsNativePointer
+  ) => WindowsNativeLevelReading;
+  /** Set the physical-monitor contrast value. */
+  readonly setMonitorContrast: (
+    monitor: WindowsNativePointer,
+    value: number
+  ) => boolean;
+  /** Stage or commit a ChangeDisplaySettingsExW request. */
+  readonly changeDisplaySettings: (
+    deviceName: string | null,
+    mode: Uint8Array | null,
+    flags: number
+  ) => number;
+}
+
+/** Optional platform and native dependencies for a Windows display port. */
+export interface WindowsDisplayPortOptions {
+  /** Override the runtime platform, primarily for deterministic tests. */
+  readonly platform?: string;
+  /** Supply pointer-free native bindings instead of loading Bun FFI. */
+  readonly nativeApi?: WindowsDisplayNativeApi;
 }
 
 /** A 256-entry, 16-bit-per-channel display gamma ramp. */
@@ -201,32 +352,12 @@ export interface WindowsDisplayPort {
   ) => Promise<WindowsPlatformResult<void>>;
 }
 
-interface NativeRect {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-}
+type NativeRect = WindowsNativeRect;
 
-interface NativeDisplayRecord {
-  readonly hMonitor: NativePointer;
-  readonly deviceName: string;
-  readonly displayName: string;
-  readonly devicePath: string;
-  readonly bounds: NativeRect;
-  readonly workArea: NativeRect;
-  readonly mode: {
-    readonly width: number;
-    readonly height: number;
-    readonly refreshRate: number;
-    readonly bitsPerPixel: number;
-  };
-  readonly isPrimary: boolean;
-  readonly edid?: EdidBaseBlock;
-}
+type NativeDisplayRecord = WindowsNativeDisplayRecord;
 
 interface NativeMonitorRecord {
-  readonly hMonitor: NativePointer;
+  readonly hMonitor: WindowsNativePointer;
   readonly deviceName: string;
   readonly identity: WindowsDisplayIdentity;
   readonly snapshot: MonitorSnapshot;
@@ -259,7 +390,7 @@ interface User32Symbols {
     lParam: Pointer | null
   ) => number;
   readonly GetMonitorInfoW: (
-    monitor: NativePointer,
+    monitor: WindowsNativePointer,
     monitorInfo: Pointer
   ) => number;
 }
@@ -270,25 +401,25 @@ interface Gdi32Symbols {
     device: Pointer,
     output: Pointer | null,
     initData: Pointer | null
-  ) => NativePointer | null;
-  readonly DeleteDC: (deviceContext: NativePointer) => number;
+  ) => WindowsNativePointer | null;
+  readonly DeleteDC: (deviceContext: WindowsNativePointer) => number;
   readonly GetDeviceGammaRamp: (
-    deviceContext: NativePointer,
+    deviceContext: WindowsNativePointer,
     ramp: Pointer
   ) => number;
   readonly SetDeviceGammaRamp: (
-    deviceContext: NativePointer,
+    deviceContext: WindowsNativePointer,
     ramp: Pointer
   ) => number;
 }
 
 interface Dxva2Symbols {
   readonly GetNumberOfPhysicalMonitorsFromHMONITOR: (
-    hMonitor: NativePointer,
+    hMonitor: WindowsNativePointer,
     count: Pointer
   ) => number;
   readonly GetPhysicalMonitorsFromHMONITOR: (
-    hMonitor: NativePointer,
+    hMonitor: WindowsNativePointer,
     count: number,
     monitors: Pointer
   ) => number;
@@ -297,38 +428,38 @@ interface Dxva2Symbols {
     monitors: Pointer
   ) => number;
   readonly GetMonitorBrightness: (
-    monitor: NativePointer,
+    monitor: WindowsNativePointer,
     minimum: Pointer,
     current: Pointer,
     maximum: Pointer
   ) => number;
   readonly SetMonitorBrightness: (
-    monitor: NativePointer,
+    monitor: WindowsNativePointer,
     value: number
   ) => number;
   readonly GetMonitorContrast: (
-    monitor: NativePointer,
+    monitor: WindowsNativePointer,
     minimum: Pointer,
     current: Pointer,
     maximum: Pointer
   ) => number;
   readonly SetMonitorContrast: (
-    monitor: NativePointer,
+    monitor: WindowsNativePointer,
     value: number
   ) => number;
 }
 
 interface RegistrySymbols {
-  readonly RegCloseKey: (key: NativePointer) => number;
+  readonly RegCloseKey: (key: WindowsNativePointer) => number;
   readonly RegOpenKeyExW: (
-    root: NativePointer,
+    root: WindowsNativePointer,
     subKey: Pointer,
     options: number,
     desiredAccess: number,
     result: Pointer
   ) => number;
   readonly RegQueryValueExW: (
-    key: NativePointer,
+    key: WindowsNativePointer,
     valueName: Pointer,
     reserved: Pointer | null,
     valueType: Pointer,
@@ -343,8 +474,6 @@ interface BunFfiModule {
   readonly ptr: typeof ptr;
   readonly read: typeof read;
 }
-
-const isWindows = (): boolean => process.platform === "win32";
 
 const success = <T>(value: T): WindowsPlatformResult<T> => ({
   _tag: "Success",
@@ -445,7 +574,7 @@ const wideString = (value: string): Uint16Array => {
   return result;
 };
 
-const pointerIsNull = (value: NativePointer | null): value is null =>
+const pointerIsNull = (value: WindowsNativePointer | null): value is null =>
   value === null || value === 0 || value === 0n;
 
 const readRect = (view: DataView, byteOffset: number): NativeRect => {
@@ -720,28 +849,16 @@ const readRegistryEdid = (
 };
 
 const readExternalLevel = (
-  readLevel: Dxva2Symbols["GetMonitorBrightness"],
-  monitor: NativePointer,
-  ffi: BunFfi
+  readLevel: () => WindowsNativeLevelReading
 ): ExternalLevelCapability => {
-  const minimumBuffer = new Uint8Array(4);
-  const currentBuffer = new Uint8Array(4);
-  const maximumBuffer = new Uint8Array(4);
-  const supported = readLevel(
-    monitor,
-    ffi.ptr(minimumBuffer),
-    ffi.ptr(currentBuffer),
-    ffi.ptr(maximumBuffer)
-  );
-  if (supported === 0) {
+  const reading = readLevel();
+  if (!reading.succeeded) {
     return {
       _tag: "Unsupported",
       reason: "The physical monitor does not expose this VCP control",
     };
   }
-  const minimum = new DataView(minimumBuffer.buffer).getUint32(0, true);
-  const current = new DataView(currentBuffer.buffer).getUint32(0, true);
-  const maximum = new DataView(maximumBuffer.buffer).getUint32(0, true);
+  const { current, maximum, minimum } = reading;
   if (minimum > current || current > maximum || maximum > 65_535) {
     return {
       _tag: "Unsupported",
@@ -749,6 +866,71 @@ const readExternalLevel = (
     };
   }
   return { _tag: "Supported", current, maximum, minimum };
+};
+
+type NativeDxva2Api = Pick<
+  WindowsDisplayNativeApi,
+  | "acquirePhysicalMonitors"
+  | "getMonitorBrightness"
+  | "getMonitorContrast"
+  | "getPhysicalMonitorCount"
+  | "setMonitorBrightness"
+  | "setMonitorContrast"
+>;
+
+const withPhysicalMonitorUsingApi = <T>(
+  operation: WindowsPlatformOperation,
+  record: NativeMonitorRecord,
+  api: NativeDxva2Api,
+  action: (
+    physicalMonitor: WindowsNativePointer,
+    nativeApi: NativeDxva2Api
+  ) => WindowsPlatformResult<T>
+): WindowsPlatformResult<T> => {
+  const countResult = api.getPhysicalMonitorCount(record.hMonitor);
+  if (!countResult.succeeded) {
+    return unsupported(
+      operation,
+      "DXVA2 could not expose a physical monitor for this display"
+    );
+  }
+  const { count } = countResult;
+  if (count === 0) {
+    return unsupported(operation, "Windows reported no physical monitors");
+  }
+  if (count > MAX_PHYSICAL_MONITORS) {
+    return failure(
+      operation,
+      "Windows reported an unsafe physical-monitor count"
+    );
+  }
+
+  const lease = api.acquirePhysicalMonitors(record.hMonitor, count);
+  if (lease === null) {
+    return unsupported(
+      operation,
+      "DXVA2 could not acquire a physical-monitor handle"
+    );
+  }
+
+  let result: WindowsPlatformResult<T> = failure(
+    operation,
+    "DXVA2 physical-monitor operation did not complete"
+  );
+  try {
+    result =
+      lease.monitor === null
+        ? failure(operation, "DXVA2 returned a null physical-monitor handle")
+        : action(lease.monitor, api);
+  } finally {
+    if (!lease.destroy() && result._tag === "Success") {
+      result = failure(
+        operation,
+        "DXVA2 failed to destroy the physical-monitor handle"
+      );
+    }
+  }
+  return result;
 };
 
 const gammaRampError = (ramp: GammaRamp): string | undefined => {
@@ -770,16 +952,28 @@ const gammaRampError = (ramp: GammaRamp): string | undefined => {
   return undefined;
 };
 
-const makeGammaRamp = (buffer: Uint8Array): GammaRamp => {
-  const values = new Uint16Array(
+const makeGammaRamp = (buffer: Uint8Array): GammaRamp | string => {
+  if (buffer.byteLength !== GAMMA_RAMP_BYTE_LENGTH) {
+    return "Windows returned an invalid gamma-ramp buffer";
+  }
+  const view = new DataView(
     buffer.buffer,
     buffer.byteOffset,
-    GAMMA_CHANNEL_LENGTH * 3
+    buffer.byteLength
   );
+  const readChannel = (channel: number): number[] => {
+    const values: number[] = [];
+    for (let index = 0; index < GAMMA_CHANNEL_LENGTH; index += 1) {
+      values.push(
+        view.getUint16((channel * GAMMA_CHANNEL_LENGTH + index) * 2, true)
+      );
+    }
+    return values;
+  };
   return {
-    blue: [...values.subarray(GAMMA_CHANNEL_LENGTH * 2)],
-    green: [...values.subarray(GAMMA_CHANNEL_LENGTH, GAMMA_CHANNEL_LENGTH * 2)],
-    red: [...values.subarray(0, GAMMA_CHANNEL_LENGTH)],
+    blue: readChannel(2),
+    green: readChannel(1),
+    red: readChannel(0),
   };
 };
 
@@ -790,6 +984,34 @@ const writeGammaRamp = (ramp: GammaRamp): Uint8Array => {
   values.set(ramp.green, GAMMA_CHANNEL_LENGTH);
   values.set(ramp.blue, GAMMA_CHANNEL_LENGTH * 2);
   return buffer;
+};
+
+type NativeGdiApi = Pick<
+  WindowsDisplayNativeApi,
+  | "createDisplayContext"
+  | "deleteDisplayContext"
+  | "getDeviceGammaRamp"
+  | "setDeviceGammaRamp"
+>;
+
+const withDisplayContextUsingApi = <T>(
+  operation: WindowsPlatformOperation,
+  deviceName: string,
+  api: NativeGdiApi,
+  action: (
+    deviceContext: WindowsNativePointer,
+    nativeApi: NativeGdiApi
+  ) => WindowsPlatformResult<T>
+): WindowsPlatformResult<T> => {
+  const deviceContext = api.createDisplayContext(deviceName);
+  if (pointerIsNull(deviceContext)) {
+    return failure(operation, NULL_DISPLAY_CONTEXT_REASON);
+  }
+  try {
+    return action(deviceContext, api);
+  } finally {
+    api.deleteDisplayContext(deviceContext);
+  }
 };
 
 interface DisplayChangeRequest {
@@ -826,9 +1048,8 @@ const collectDisplayChangeRequests = (
 /**
  * Compare the live display state needed to safely apply a plan.
  *
- * This remains a pure local helper because the native mutation path has no
- * injectable FFI seam; the comparison itself is therefore kept small and
- * side-effect free rather than adding native integration coverage.
+ * This remains a pure local helper so a native implementation cannot bypass the
+ * stale-topology guard before a mutation is attempted.
  */
 const topologiesMatchForApply = (
   expected: MonitorTopology,
@@ -1065,12 +1286,12 @@ const discoverNative = async (): Promise<
       // SAFETY: These signatures match the handwritten descriptors immediately above and the Windows C ABI.
       /* oxlint-disable-next-line anti-slop/no-chained-type-assertions -- Bun's generic descriptor inference cannot express the Windows ABI. */
       const symbols = user32.symbols as unknown as User32Symbols;
-      const monitorHandles: NativePointer[] = [];
+      const monitorHandles: WindowsNativePointer[] = [];
       const callback = new ffi.JSCallback(
         (
-          monitor: NativePointer | null,
-          _deviceContext: NativePointer | null,
-          _monitorRect: NativePointer | null,
+          monitor: WindowsNativePointer | null,
+          _deviceContext: WindowsNativePointer | null,
+          _monitorRect: WindowsNativePointer | null,
           _data: number | bigint
         ) => {
           if (!pointerIsNull(monitor)) {
@@ -1216,9 +1437,8 @@ const withPhysicalMonitor = async <T>(
   operation: WindowsPlatformOperation,
   record: NativeMonitorRecord,
   action: (
-    symbols: Dxva2Symbols,
-    physicalMonitor: NativePointer,
-    ffi: BunFfi
+    physicalMonitor: WindowsNativePointer,
+    nativeApi: NativeDxva2Api
   ) => WindowsPlatformResult<T>
 ): Promise<WindowsPlatformResult<T>> => {
   try {
@@ -1227,78 +1447,147 @@ const withPhysicalMonitor = async <T>(
     try {
       // SAFETY: These signatures match the handwritten descriptors immediately above and the Windows C ABI.
       const symbols = dxva2.symbols as Dxva2Symbols;
-      const countBuffer = new Uint8Array(4);
-      if (
-        symbols.GetNumberOfPhysicalMonitorsFromHMONITOR(
-          record.hMonitor,
-          ffi.ptr(countBuffer)
-        ) === 0
-      ) {
-        return unsupported(
-          operation,
-          "DXVA2 could not expose a physical monitor for this display"
-        );
-      }
-      const count = new DataView(countBuffer.buffer).getUint32(0, true);
-      if (count === 0) {
-        return unsupported(operation, "Windows reported no physical monitors");
-      }
-      if (count > MAX_PHYSICAL_MONITORS) {
-        return failure(
-          operation,
-          "Windows reported an unsafe physical-monitor count"
-        );
-      }
-
-      const physicalMonitors = new Uint8Array(count * PHYSICAL_MONITOR_SIZE);
-      let acquired = false;
-      let result: WindowsPlatformResult<T> = failure(
-        operation,
-        "DXVA2 physical-monitor operation did not complete"
-      );
-      try {
-        if (
-          symbols.GetPhysicalMonitorsFromHMONITOR(
-            record.hMonitor,
-            count,
-            ffi.ptr(physicalMonitors)
-          ) === 0
-        ) {
-          result = unsupported(
-            operation,
-            "DXVA2 could not acquire a physical-monitor handle"
+      const nativeApi: NativeDxva2Api = {
+        acquirePhysicalMonitors: (monitor, count) => {
+          const physicalMonitors = new Uint8Array(
+            count * PHYSICAL_MONITOR_SIZE
           );
-        } else {
-          acquired = true;
-          const physicalMonitor = ffi.read.u64(ffi.ptr(physicalMonitors));
-          result =
-            physicalMonitor === 0n
-              ? failure(
-                  operation,
-                  "DXVA2 returned a null physical-monitor handle"
-                )
-              : action(symbols, physicalMonitor, ffi);
-        }
-      } finally {
-        if (
-          acquired &&
-          symbols.DestroyPhysicalMonitors(count, ffi.ptr(physicalMonitors)) ===
-            0 &&
-          result._tag === "Success"
-        ) {
-          result = failure(
-            operation,
-            "DXVA2 failed to destroy the physical-monitor handle"
-          );
-        }
-      }
-      return result;
+          if (
+            symbols.GetPhysicalMonitorsFromHMONITOR(
+              monitor,
+              count,
+              ffi.ptr(physicalMonitors)
+            ) === 0
+          ) {
+            return null;
+          }
+          const destroy = () =>
+            symbols.DestroyPhysicalMonitors(
+              count,
+              ffi.ptr(physicalMonitors)
+            ) !== 0;
+          let physicalMonitor: WindowsNativePointer | null = null;
+          try {
+            physicalMonitor = ffi.read.u64(ffi.ptr(physicalMonitors));
+          } catch (error) {
+            destroy();
+            throw error;
+          }
+          return {
+            destroy,
+            monitor: physicalMonitor,
+          };
+        },
+        getMonitorBrightness: (monitor) => {
+          const minimumBuffer = new Uint8Array(4);
+          const currentBuffer = new Uint8Array(4);
+          const maximumBuffer = new Uint8Array(4);
+          const succeeded =
+            symbols.GetMonitorBrightness(
+              monitor,
+              ffi.ptr(minimumBuffer),
+              ffi.ptr(currentBuffer),
+              ffi.ptr(maximumBuffer)
+            ) !== 0;
+          return {
+            current: new DataView(currentBuffer.buffer).getUint32(0, true),
+            maximum: new DataView(maximumBuffer.buffer).getUint32(0, true),
+            minimum: new DataView(minimumBuffer.buffer).getUint32(0, true),
+            succeeded,
+          };
+        },
+        getMonitorContrast: (monitor) => {
+          const minimumBuffer = new Uint8Array(4);
+          const currentBuffer = new Uint8Array(4);
+          const maximumBuffer = new Uint8Array(4);
+          const succeeded =
+            symbols.GetMonitorContrast(
+              monitor,
+              ffi.ptr(minimumBuffer),
+              ffi.ptr(currentBuffer),
+              ffi.ptr(maximumBuffer)
+            ) !== 0;
+          return {
+            current: new DataView(currentBuffer.buffer).getUint32(0, true),
+            maximum: new DataView(maximumBuffer.buffer).getUint32(0, true),
+            minimum: new DataView(minimumBuffer.buffer).getUint32(0, true),
+            succeeded,
+          };
+        },
+        getPhysicalMonitorCount: (monitor) => {
+          const countBuffer = new Uint8Array(4);
+          const succeeded =
+            symbols.GetNumberOfPhysicalMonitorsFromHMONITOR(
+              monitor,
+              ffi.ptr(countBuffer)
+            ) !== 0;
+          return {
+            count: new DataView(countBuffer.buffer).getUint32(0, true),
+            succeeded,
+          };
+        },
+        setMonitorBrightness: (monitor, value) =>
+          symbols.SetMonitorBrightness(monitor, value) !== 0,
+        setMonitorContrast: (monitor, value) =>
+          symbols.SetMonitorContrast(monitor, value) !== 0,
+      };
+      return withPhysicalMonitorUsingApi(operation, record, nativeApi, action);
     } finally {
       dxva2.close();
     }
   } catch (error) {
     return failure(operation, describeFailure(error));
   }
+};
+
+const readBrightnessContrastCapabilities = (
+  physicalMonitor: WindowsNativePointer,
+  nativeApi: NativeDxva2Api
+): WindowsPlatformResult<BrightnessContrastCapabilities> => ({
+  _tag: "Success",
+  value: {
+    brightness: readExternalLevel(() =>
+      nativeApi.getMonitorBrightness(physicalMonitor)
+    ),
+    contrast: readExternalLevel(() =>
+      nativeApi.getMonitorContrast(physicalMonitor)
+    ),
+  },
+});
+
+const setExternalLevelUsingApi = (
+  physicalMonitor: WindowsNativePointer,
+  nativeApi: NativeDxva2Api,
+  value: number,
+  operation: "setBrightness" | "setContrast",
+  level: "brightness" | "contrast"
+): WindowsPlatformResult<void> => {
+  const capability = readExternalLevel(() =>
+    level === "brightness"
+      ? nativeApi.getMonitorBrightness(physicalMonitor)
+      : nativeApi.getMonitorContrast(physicalMonitor)
+  );
+  if (capability._tag === "Unsupported") {
+    return unsupported(operation, capability.reason);
+  }
+  if (value < capability.minimum || value > capability.maximum) {
+    return failure(
+      operation,
+      `Requested value is outside the physical monitor range ${capability.minimum}-${capability.maximum}`
+    );
+  }
+  const succeeded =
+    level === "brightness"
+      ? nativeApi.setMonitorBrightness(physicalMonitor, value)
+      : nativeApi.setMonitorContrast(physicalMonitor, value);
+  if (!succeeded) {
+    return failure(
+      operation,
+      "The physical monitor rejected the requested VCP value"
+    );
+  }
+  // oxlint-disable-next-line unicorn/no-useless-undefined -- The success payload is intentionally void.
+  return success(undefined);
 };
 
 const findMonitorRecord = async (
@@ -1325,6 +1614,67 @@ const findMonitorRecord = async (
   return success(record);
 };
 
+type NativeChangeDisplaySettings = (
+  deviceName: string | null,
+  mode: Uint8Array | null,
+  flags: number
+) => number;
+
+const applyNativeDisplayChanges = (
+  discovery: WindowsDisplayDiscoveryWithRecords,
+  desired: DisplayProfile,
+  plan: ApplyPlan,
+  changeDisplaySettings: NativeChangeDisplaySettings
+): WindowsPlatformResult<void> => {
+  const operation = "applyDisplayPlan" as const;
+  const desiredById = new Map(
+    desired.monitors.map((monitor) => [monitor.id, monitor])
+  );
+  const changes = collectDisplayChangeRequests(plan);
+  let restartRequired = false;
+
+  for (const [monitorId, change] of changes) {
+    const record = discovery.recordsById.get(monitorId);
+    const target = desiredById.get(monitorId);
+    if (record === undefined || target === undefined) {
+      return failure(
+        operation,
+        "The display plan references a monitor missing from the current topology"
+      );
+    }
+    const mode = makeDisplayChangeMode(target, change);
+    if (typeof mode === "string") {
+      return failure(operation, mode);
+    }
+    let flags = CDS_UPDATEREGISTRY + CDS_NORESET;
+    if (change.primary) {
+      flags += CDS_SET_PRIMARY;
+    }
+    const result = classifyDisplayChangeResult(
+      changeDisplaySettings(record.deviceName, mode, flags)
+    );
+    if (result._tag === "Failed") {
+      return failure(operation, result.reason);
+    }
+    if (result._tag === "RestartRequired") {
+      // The settings were staged successfully; finish staging every device before the documented commit call.
+      restartRequired = true;
+    }
+  }
+
+  const commit = classifyDisplayChangeResult(
+    changeDisplaySettings(null, null, 0)
+  );
+  if (commit._tag === "Failed") {
+    return failure(operation, commit.reason);
+  }
+  if (restartRequired || commit._tag === "RestartRequired") {
+    return failure(operation, displayChangeReason(DISP_CHANGE_RESTART));
+  }
+  // oxlint-disable-next-line unicorn/no-useless-undefined -- The success payload is intentionally void.
+  return success(undefined);
+};
+
 /**
  * Create a direct Bun FFI Windows display adapter.
  *
@@ -1333,16 +1683,30 @@ const findMonitorRecord = async (
  * ID-to-device lookup across operations. Each discovery-dependent operation
  * keeps its own discovery context until that operation completes.
  *
+ * @param options - Runtime platform and pointer-free native binding overrides.
  * @returns A typed port for discovery, gamma, brightness, and contrast operations.
  */
-export const createWindowsDisplayPort = (): WindowsDisplayPort => {
+export const createWindowsDisplayPort = (
+  options: WindowsDisplayPortOptions = {}
+): WindowsDisplayPort => {
+  const platform = options.platform ?? process.platform;
   const discoverWithRecords = async (): Promise<
     WindowsPlatformResult<WindowsDisplayDiscoveryWithRecords>
   > => {
-    if (!isWindows()) {
+    if (platform !== "win32") {
       return unsupportedOffWindows("discover");
     }
-    const nativeResult = await discoverNative();
+    let nativeResult: WindowsPlatformResult<
+      readonly WindowsNativeDisplayRecord[]
+    >;
+    try {
+      nativeResult =
+        options.nativeApi === undefined
+          ? await discoverNative()
+          : await options.nativeApi.discoverDisplays();
+    } catch (error) {
+      return failure("discover", describeFailure(error));
+    }
     if (nativeResult._tag === "Unsupported") {
       return nativeResult;
     }
@@ -1394,7 +1758,7 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
     monitorId: MonitorId
   ): Promise<WindowsPlatformResult<GammaRamp>> => {
     const operation = "getGammaRamp" as const;
-    if (!isWindows()) {
+    if (platform !== "win32") {
       return unsupportedOffWindows(operation);
     }
     const recordResult = await findMonitorRecord(
@@ -1404,6 +1768,30 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
     );
     if (recordResult._tag !== "Success") {
       return recordResult;
+    }
+    if (options.nativeApi !== undefined) {
+      try {
+        return withDisplayContextUsingApi(
+          operation,
+          recordResult.value.deviceName,
+          options.nativeApi,
+          (deviceContext, nativeApi) => {
+            const rampBuffer = new Uint8Array(GAMMA_RAMP_BYTE_LENGTH);
+            if (!nativeApi.getDeviceGammaRamp(deviceContext, rampBuffer)) {
+              return unsupported(
+                operation,
+                "The display driver does not expose a gamma ramp"
+              );
+            }
+            const ramp = makeGammaRamp(rampBuffer);
+            return typeof ramp === "string"
+              ? failure(operation, ramp)
+              : success(ramp);
+          }
+        );
+      } catch (error) {
+        return failure(operation, describeFailure(error));
+      }
     }
     try {
       const ffi = await import("bun:ffi");
@@ -1420,10 +1808,7 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
           null
         );
         if (pointerIsNull(deviceContext)) {
-          return failure(
-            operation,
-            "CreateDCW returned a null display context"
-          );
+          return failure(operation, NULL_DISPLAY_CONTEXT_REASON);
         }
         try {
           const rampBuffer = new Uint8Array(GAMMA_RAMP_BYTE_LENGTH);
@@ -1435,7 +1820,10 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
               "The display driver does not expose a gamma ramp"
             );
           }
-          return success(makeGammaRamp(rampBuffer));
+          const ramp = makeGammaRamp(rampBuffer);
+          return typeof ramp === "string"
+            ? failure(operation, ramp)
+            : success(ramp);
         } finally {
           symbols.DeleteDC(deviceContext);
         }
@@ -1452,7 +1840,7 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
     ramp: GammaRamp
   ): Promise<WindowsPlatformResult<void>> => {
     const operation = "setGammaRamp" as const;
-    if (!isWindows()) {
+    if (platform !== "win32") {
       return unsupportedOffWindows(operation);
     }
     const rampError = gammaRampError(ramp);
@@ -1466,6 +1854,28 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
     );
     if (recordResult._tag !== "Success") {
       return recordResult;
+    }
+    if (options.nativeApi !== undefined) {
+      try {
+        return withDisplayContextUsingApi(
+          operation,
+          recordResult.value.deviceName,
+          options.nativeApi,
+          (deviceContext, nativeApi) => {
+            const rampBuffer = writeGammaRamp(ramp);
+            if (!nativeApi.setDeviceGammaRamp(deviceContext, rampBuffer)) {
+              return unsupported(
+                operation,
+                "The display driver rejected gamma-ramp writes"
+              );
+            }
+            // oxlint-disable-next-line unicorn/no-useless-undefined -- The success payload is intentionally void.
+            return success(undefined);
+          }
+        );
+      } catch (error) {
+        return failure(operation, describeFailure(error));
+      }
     }
     try {
       const ffi = await import("bun:ffi");
@@ -1482,10 +1892,7 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
           null
         );
         if (pointerIsNull(deviceContext)) {
-          return failure(
-            operation,
-            "CreateDCW returned a null display context"
-          );
+          return failure(operation, NULL_DISPLAY_CONTEXT_REASON);
         }
         try {
           const rampBuffer = writeGammaRamp(ramp);
@@ -1514,7 +1921,7 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
     monitorId: MonitorId
   ): Promise<WindowsPlatformResult<BrightnessContrastCapabilities>> => {
     const operation = "getBrightnessContrastCapabilities" as const;
-    if (!isWindows()) {
+    if (platform !== "win32") {
       return unsupportedOffWindows(operation);
     }
     const recordResult = await findMonitorRecord(
@@ -1525,24 +1932,24 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
     if (recordResult._tag !== "Success") {
       return recordResult;
     }
+    if (options.nativeApi !== undefined) {
+      try {
+        return withPhysicalMonitorUsingApi(
+          operation,
+          recordResult.value,
+          options.nativeApi,
+          (physicalMonitor, nativeApi) =>
+            readBrightnessContrastCapabilities(physicalMonitor, nativeApi)
+        );
+      } catch (error) {
+        return failure(operation, describeFailure(error));
+      }
+    }
     return withPhysicalMonitor(
       operation,
       recordResult.value,
-      (symbols, physicalMonitor, ffi) => ({
-        _tag: "Success",
-        value: {
-          brightness: readExternalLevel(
-            symbols.GetMonitorBrightness,
-            physicalMonitor,
-            ffi
-          ),
-          contrast: readExternalLevel(
-            symbols.GetMonitorContrast,
-            physicalMonitor,
-            ffi
-          ),
-        },
-      })
+      (physicalMonitor, nativeApi) =>
+        readBrightnessContrastCapabilities(physicalMonitor, nativeApi)
     );
   };
 
@@ -1550,10 +1957,9 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
     monitorId: MonitorId,
     value: number,
     operation: "setBrightness" | "setContrast",
-    readLevel: (symbols: Dxva2Symbols) => Dxva2Symbols["GetMonitorBrightness"],
-    writeLevel: (symbols: Dxva2Symbols) => Dxva2Symbols["SetMonitorBrightness"]
+    level: "brightness" | "contrast"
   ): Promise<WindowsPlatformResult<void>> => {
-    if (!isWindows()) {
+    if (platform !== "win32") {
       return unsupportedOffWindows(operation);
     }
     if (!Number.isInteger(value) || value < 0 || value > 65_535) {
@@ -1570,33 +1976,36 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
     if (recordResult._tag !== "Success") {
       return recordResult;
     }
+    if (options.nativeApi !== undefined) {
+      try {
+        return withPhysicalMonitorUsingApi(
+          operation,
+          recordResult.value,
+          options.nativeApi,
+          (physicalMonitor, nativeApi) =>
+            setExternalLevelUsingApi(
+              physicalMonitor,
+              nativeApi,
+              value,
+              operation,
+              level
+            )
+        );
+      } catch (error) {
+        return failure(operation, describeFailure(error));
+      }
+    }
     return withPhysicalMonitor(
       operation,
       recordResult.value,
-      (symbols, physicalMonitor, ffi) => {
-        const capability = readExternalLevel(
-          readLevel(symbols),
+      (physicalMonitor, nativeApi) =>
+        setExternalLevelUsingApi(
           physicalMonitor,
-          ffi
-        );
-        if (capability._tag === "Unsupported") {
-          return unsupported(operation, capability.reason);
-        }
-        if (value < capability.minimum || value > capability.maximum) {
-          return failure(
-            operation,
-            `Requested value is outside the physical monitor range ${capability.minimum}-${capability.maximum}`
-          );
-        }
-        if (writeLevel(symbols)(physicalMonitor, value) === 0) {
-          return failure(
-            operation,
-            "The physical monitor rejected the requested VCP value"
-          );
-        }
-        // oxlint-disable-next-line unicorn/no-useless-undefined -- The success payload is intentionally void.
-        return success(undefined);
-      }
+          nativeApi,
+          value,
+          operation,
+          level
+        )
     );
   };
 
@@ -1604,25 +2013,13 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
     monitorId: MonitorId,
     value: number
   ): Promise<WindowsPlatformResult<void>> =>
-    setExternalLevel(
-      monitorId,
-      value,
-      "setBrightness",
-      (symbols) => symbols.GetMonitorBrightness,
-      (symbols) => symbols.SetMonitorBrightness
-    );
+    setExternalLevel(monitorId, value, "setBrightness", "brightness");
 
   const setContrast = (
     monitorId: MonitorId,
     value: number
   ): Promise<WindowsPlatformResult<void>> =>
-    setExternalLevel(
-      monitorId,
-      value,
-      "setContrast",
-      (symbols) => symbols.GetMonitorContrast,
-      (symbols) => symbols.SetMonitorContrast
-    );
+    setExternalLevel(monitorId, value, "setContrast", "contrast");
 
   const applyDisplayPlan = async (
     current: MonitorTopology,
@@ -1630,7 +2027,7 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
     plan: ApplyPlan
   ): Promise<WindowsPlatformResult<void>> => {
     const operation = "applyDisplayPlan" as const;
-    if (!isWindows()) {
+    if (platform !== "win32") {
       return unsupportedOffWindows(operation);
     }
     if (plan.dryRun) {
@@ -1655,64 +2052,37 @@ export const createWindowsDisplayPort = (): WindowsDisplayPort => {
       );
     }
 
-    const desiredById = new Map(
-      desired.monitors.map((monitor) => [monitor.id, monitor])
-    );
-    const changes = collectDisplayChangeRequests(plan);
+    if (options.nativeApi !== undefined) {
+      try {
+        return applyNativeDisplayChanges(
+          discovery.value,
+          desired,
+          plan,
+          options.nativeApi.changeDisplaySettings
+        );
+      } catch (error) {
+        return failure(operation, describeFailure(error));
+      }
+    }
     try {
       const ffi = await import("bun:ffi");
       const user32 = ffi.dlopen("user32.dll", makeUser32Symbols(ffi.FFIType));
       try {
         // SAFETY: These signatures match the handwritten descriptors immediately above and the Windows C ABI.
         const symbols = user32.symbols as User32Symbols;
-        let restartRequired = false;
-        for (const [monitorId, change] of changes) {
-          const record = discovery.value.recordsById.get(monitorId);
-          const target = desiredById.get(monitorId);
-          if (record === undefined || target === undefined) {
-            return failure(
-              operation,
-              "The display plan references a monitor missing from the current topology"
-            );
-          }
-          const mode = makeDisplayChangeMode(target, change);
-          if (typeof mode === "string") {
-            return failure(operation, mode);
-          }
-          const deviceName = wideString(record.deviceName);
-          let flags = CDS_UPDATEREGISTRY + CDS_NORESET;
-          if (change.primary) {
-            flags += CDS_SET_PRIMARY;
-          }
-          const result = classifyDisplayChangeResult(
+        return applyNativeDisplayChanges(
+          discovery.value,
+          desired,
+          plan,
+          (deviceName, mode, flags) =>
             symbols.ChangeDisplaySettingsExW(
-              ffi.ptr(deviceName),
-              ffi.ptr(mode),
+              deviceName === null ? null : ffi.ptr(wideString(deviceName)),
+              mode === null ? null : ffi.ptr(mode),
               null,
               flags,
               null
             )
-          );
-          if (result._tag === "Failed") {
-            return failure(operation, result.reason);
-          }
-          if (result._tag === "RestartRequired") {
-            // The settings were staged successfully; finish staging every device before the documented commit call.
-            restartRequired = true;
-          }
-        }
-
-        const commit = classifyDisplayChangeResult(
-          symbols.ChangeDisplaySettingsExW(null, null, null, 0, null)
         );
-        if (commit._tag === "Failed") {
-          return failure(operation, commit.reason);
-        }
-        if (restartRequired || commit._tag === "RestartRequired") {
-          return failure(operation, displayChangeReason(DISP_CHANGE_RESTART));
-        }
-        // oxlint-disable-next-line unicorn/no-useless-undefined -- The success payload is intentionally void.
-        return success(undefined);
       } finally {
         user32.close();
       }

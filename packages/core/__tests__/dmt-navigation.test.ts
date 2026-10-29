@@ -8,6 +8,8 @@ import {
   selectCurrentMonitor,
 } from "../src/dmt/current-monitor";
 import {
+  InvalidMonitorOffset,
+  monitorAtOffset,
   selectNextMonitor,
   selectPreviousMonitor,
 } from "../src/dmt/monitor-navigation";
@@ -65,6 +67,12 @@ describe("DMT monitor navigation", () => {
     expect(run(selectPreviousMonitor(current, id("primary"))).id).toBe(
       id("above")
     );
+    expect(run(monitorAtOffset(current, id("primary"), 2)).id).toBe(
+      id("above")
+    );
+    expect(run(monitorAtOffset(current, id("primary"), -2)).id).toBe(
+      id("left")
+    );
   });
 
   it("reports a missing current monitor rather than choosing by position", () => {
@@ -72,6 +80,9 @@ describe("DMT monitor navigation", () => {
     expect(failure(selectNextMonitor(current, id("missing")))._tag).toBe(
       "MonitorNotFound"
     );
+    expect(
+      failure(monitorAtOffset(current, id("primary"), 1.5))
+    ).toBeInstanceOf(InvalidMonitorOffset);
   });
 });
 

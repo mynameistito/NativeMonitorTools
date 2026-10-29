@@ -1,12 +1,20 @@
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
 
 import { MonitorNotFound } from "../errors";
 import { orderMonitors } from "../monitor";
 import type { MonitorSnapshot, MonitorTopology } from "../monitor";
 import type { MonitorId } from "../monitor-id";
 
+/** The requested monitor offset is not a safe integer. */
+export class InvalidMonitorOffset extends Data.TaggedError(
+  "InvalidMonitorOffset"
+)<{
+  /** Offset supplied by the caller. */
+  readonly delta: number;
+}> {}
+
 /** All expected failures from deterministic monitor navigation. */
-export type MonitorNavigationError = MonitorNotFound;
+export type MonitorNavigationError = MonitorNotFound | InvalidMonitorOffset;
 
 const monitorNotFound = (monitorId: MonitorId): MonitorNotFound =>
   new MonitorNotFound({ selector: monitorId });
@@ -17,6 +25,9 @@ const selectedMonitor = (
   delta: number
 ): Effect.Effect<MonitorSnapshot, MonitorNavigationError> => {
   const monitors = orderMonitors(topology.monitors);
+  if (!Number.isSafeInteger(delta)) {
+    return Effect.fail(new InvalidMonitorOffset({ delta }));
+  }
   const currentIndex = monitors.findIndex(
     (monitor) => monitor.id === currentId
   );
@@ -27,9 +38,8 @@ const selectedMonitor = (
     return Effect.fail(monitorNotFound(currentId));
   }
 
-  const normalizedDelta = Number.isSafeInteger(delta) ? delta : 0;
   const index =
-    (((currentIndex + normalizedDelta) % monitors.length) + monitors.length) %
+    (((currentIndex + delta) % monitors.length) + monitors.length) %
     monitors.length;
   const monitor = monitors[index];
   if (monitor === undefined) {
@@ -87,3 +97,6 @@ export const nextMonitor = selectNextMonitor;
 
 /** Alias for `selectPreviousMonitor`. */
 export const previousMonitor = selectPreviousMonitor;
+
+/** Alias for selecting a monitor at a signed offset. */
+export const monitorAtOffset = selectMonitorAtOffset;

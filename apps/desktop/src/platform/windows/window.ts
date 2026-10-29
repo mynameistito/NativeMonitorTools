@@ -3,6 +3,18 @@
 
 import type { FFIType } from "bun:ffi";
 
+import {
+  monitorForRect,
+  resolveMonitorSelector,
+} from "@native-monitor-tools/core";
+import type {
+  MonitorId,
+  MonitorSelector,
+  MonitorSnapshot,
+  MonitorTopology,
+} from "@native-monitor-tools/core";
+import { Cause, Effect, Exit, Result } from "effect";
+
 const INT32_MIN = -2_147_483_648;
 const INT32_MAX = 2_147_483_647;
 const WINDOW_PLACEMENT_SIZE = 44;
@@ -33,12 +45,40 @@ export interface WindowsWindowRect {
   readonly height: number;
 }
 
+/** A selected monitor target accepted by the foreground-window move operation. */
+export type WindowsWindowMonitorTarget = MonitorSelector | string;
+
+/** A request to move the current foreground window using a fresh topology. */
+export interface WindowsForegroundWindowMoveRequest {
+  /** The topology captured when the caller selected the target monitor. */
+  readonly topology: MonitorTopology;
+  /** A monitor ID, DMT selector, or exact monitor name. */
+  readonly targetMonitor: WindowsWindowMonitorTarget;
+  /** The topology reader used to reject stale placement plans. */
+  readonly readTopology: () => Promise<MonitorTopology>;
+  /** The current monitor identity used by the `x`/`current` selector. */
+  readonly currentMonitorId?: MonitorId;
+}
+
+/** The observable result of a foreground-window monitor move. */
+export interface WindowsForegroundWindowMoveResult {
+  /** The HWND that was checked immediately before mutation. */
+  readonly window: WindowsWindowHandle;
+  /** The monitor inferred from the window's normal rectangle. */
+  readonly sourceMonitorId: MonitorId;
+  /** The monitor selected by the request. */
+  readonly targetMonitorId: MonitorId;
+  /** The bounded normal rectangle submitted to SetWindowPos. */
+  readonly rectangle: WindowsWindowRect;
+}
+
 /** The operations exposed by the isolated Windows window port. */
 export type WindowsWindowOperation =
   | "getForegroundWindow"
   | "getNormalWindowRect"
   | "restoreWindow"
-  | "setWindowPosition";
+  | "setWindowPosition"
+  | "moveForegroundWindow";
 
 /** A typed success, unsupported capability, or native/validation failure. */
 export type WindowsWindowResult<T> =
@@ -127,6 +167,10 @@ export interface WindowsWindowPort {
   readonly restoreWindow?: (
     window: WindowsWindowHandle
   ) => Promise<WindowsWindowResult<undefined>>;
+  /** Move the selected foreground window after topology and HWND rechecks. */
+  readonly moveForegroundWindow?: (
+    request: WindowsForegroundWindowMoveRequest
+  ) => Promise<WindowsWindowResult<WindowsForegroundWindowMoveResult>>;
 }
 
 interface WindowsWindowNativeSession {
@@ -477,6 +521,161 @@ const validateWindowOwner = (
   return success(undefined);
 };
 
+type CoreResult<T> =
+  | { readonly _tag: "Success"; readonly value: T }
+  | { readonly _tag: "Failure"; readonly reason: string };
+
+const runCore = <A, E>(effect: Effect.Effect<A, E>): CoreResult<A> => {
+  const exit = Effect.runSyncExit(effect);
+  if (Exit.isSuccess(exit)) {
+    return { _tag: "Success", value: exit.value };
+  }
+  const error = Cause.findError(exit.cause);
+  if (Result.isSuccess(error)) {
+    return { _tag: "Failure", reason: describeFailure(error.success) };
+  }
+  return { _tag: "Failure", reason: "The window placement plan failed" };
+};
+
+const resolveWindowTarget = (
+  topology: MonitorTopology,
+  target: WindowsWindowMonitorTarget,
+  currentMonitorId: MonitorId | undefined
+): CoreResult<MonitorSnapshot> => {
+  if (typeof target === "string") {
+    const directMatch = topology.monitors.find(
+      (monitor) => String(monitor.id) === target
+    );
+    if (directMatch !== undefined) {
+      return { _tag: "Success", value: directMatch };
+    }
+  }
+  return runCore(
+    resolveMonitorSelector(topology, target, { currentId: currentMonitorId })
+  );
+};
+
+const rectsMatch = (
+  left: WindowsWindowRect | undefined,
+  right: WindowsWindowRect | undefined
+): boolean => {
+  if (left === undefined || right === undefined) {
+    return left === right;
+  }
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height
+  );
+};
+
+const monitorsMatch = (
+  expected: MonitorSnapshot,
+  actual: MonitorSnapshot
+): boolean => {
+  if (!rectsMatch(expected.bounds, actual.bounds)) {
+    return false;
+  }
+  if (!rectsMatch(expected.workArea, actual.workArea)) {
+    return false;
+  }
+  if (expected.isPrimary !== actual.isPrimary) {
+    return false;
+  }
+  return (
+    expected.mode.width === actual.mode.width &&
+    expected.mode.height === actual.mode.height &&
+    expected.mode.refreshRate === actual.mode.refreshRate &&
+    expected.mode.bitsPerPixel === actual.mode.bitsPerPixel
+  );
+};
+
+const topologiesMatchForWindowMove = (
+  expected: MonitorTopology,
+  actual: MonitorTopology
+): boolean => {
+  if (
+    expected.primaryId !== actual.primaryId ||
+    expected.monitors.length !== actual.monitors.length
+  ) {
+    return false;
+  }
+
+  return expected.monitors.every((expectedMonitor) => {
+    const actualMonitor = actual.monitors.find(
+      (monitor) => monitor.id === expectedMonitor.id
+    );
+    return (
+      actualMonitor !== undefined &&
+      monitorsMatch(expectedMonitor, actualMonitor)
+    );
+  });
+};
+
+interface ClampedAxis {
+  readonly start: number;
+  readonly size: number;
+}
+
+const clampAxis = (
+  start: number,
+  size: number,
+  areaStart: number,
+  areaSize: number
+): ClampedAxis => {
+  const clampedSize = Math.min(size, areaSize);
+  return {
+    size: clampedSize,
+    start: Math.min(
+      Math.max(start, areaStart),
+      areaStart + areaSize - clampedSize
+    ),
+  };
+};
+
+const moveRectBetweenMonitors = (
+  rectangle: WindowsWindowRect,
+  source: MonitorSnapshot,
+  target: MonitorSnapshot
+): WindowsWindowRect => {
+  const sourceArea = source.workArea ?? source.bounds;
+  const targetArea = target.workArea ?? target.bounds;
+  const horizontal = clampAxis(
+    targetArea.x + rectangle.x - sourceArea.x,
+    rectangle.width,
+    targetArea.x,
+    targetArea.width
+  );
+  const vertical = clampAxis(
+    targetArea.y + rectangle.y - sourceArea.y,
+    rectangle.height,
+    targetArea.y,
+    targetArea.height
+  );
+  return {
+    height: vertical.size,
+    width: horizontal.size,
+    x: horizontal.start,
+    y: vertical.start,
+  };
+};
+
+const reclassifyWindowResult = <T, U>(
+  result: WindowsWindowResult<T>,
+  operation: WindowsWindowOperation
+): WindowsWindowResult<U> => {
+  if (result._tag === "Success") {
+    return failure(
+      operation,
+      "The window operation returned an unexpected success result"
+    );
+  }
+  return result._tag === "Unsupported"
+    ? unsupported(operation, result.reason)
+    : failure(operation, result.reason);
+};
+
 /**
  * Create the isolated Windows foreground-window geometry port.
  *
@@ -653,7 +852,21 @@ export const createWindowsWindowPort = (
         if (api.showWindow === undefined) {
           return unsupported(operation, "ShowWindow is unavailable");
         }
-        api.showWindow(normalized.value, SW_RESTORE);
+        const ownerValidation = validateWindowOwner(
+          api,
+          normalized.value,
+          excludedProcessIds,
+          operation,
+          "The target window belongs to an excluded Native Monitor Tools process"
+        );
+        if (ownerValidation._tag !== "Success") {
+          return ownerValidation;
+        }
+        if (
+          !nativeCallSucceeded(api.showWindow(normalized.value, SW_RESTORE))
+        ) {
+          return failure(operation, "ShowWindow returned FALSE");
+        }
         // oxlint-disable-next-line unicorn/no-useless-undefined -- The success payload is intentionally void.
         return success(undefined);
       }
@@ -661,9 +874,110 @@ export const createWindowsWindowPort = (
     return result;
   };
 
+  const moveForegroundWindow = async (
+    request: WindowsForegroundWindowMoveRequest
+  ): Promise<WindowsWindowResult<WindowsForegroundWindowMoveResult>> => {
+    const operation = "moveForegroundWindow" as const;
+    if (platform !== "win32") {
+      return unsupportedOffWindows(operation);
+    }
+    if (request.topology.monitors.length === 0) {
+      return failure(operation, "A window move requires a non-empty topology");
+    }
+
+    const selectedTarget = resolveWindowTarget(
+      request.topology,
+      request.targetMonitor,
+      request.currentMonitorId
+    );
+    if (selectedTarget._tag === "Failure") {
+      return failure(operation, selectedTarget.reason);
+    }
+
+    const foreground = await getForegroundWindow();
+    if (foreground._tag !== "Success") {
+      return reclassifyWindowResult(foreground, operation);
+    }
+    const window = foreground.value;
+    const rectangle = await getNormalWindowRect(window);
+    if (rectangle._tag !== "Success") {
+      return reclassifyWindowResult(rectangle, operation);
+    }
+
+    let latestTopology: MonitorTopology;
+    try {
+      latestTopology = await request.readTopology();
+    } catch (error) {
+      return failure(operation, describeFailure(error));
+    }
+    if (!topologiesMatchForWindowMove(request.topology, latestTopology)) {
+      return failure(
+        operation,
+        "The live display topology no longer matches the topology used to select the target"
+      );
+    }
+
+    const latestTarget = resolveWindowTarget(
+      latestTopology,
+      request.targetMonitor,
+      request.currentMonitorId
+    );
+    if (latestTarget._tag === "Failure") {
+      return failure(operation, latestTarget.reason);
+    }
+    const source = monitorForRect(latestTopology, rectangle.value);
+    const target = latestTarget.value;
+    const targetRect = parseWindowGeometry(
+      moveRectBetweenMonitors(rectangle.value, source, target)
+    );
+    if (targetRect._tag !== "Success") {
+      return reclassifyWindowResult(targetRect, operation);
+    }
+
+    const stableForeground = await getForegroundWindow();
+    if (stableForeground._tag !== "Success") {
+      return reclassifyWindowResult(stableForeground, operation);
+    }
+    if (stableForeground.value !== window) {
+      return failure(
+        operation,
+        "The foreground window changed before the move could be applied"
+      );
+    }
+
+    if (restoreWindow !== undefined) {
+      const restored = await restoreWindow(window);
+      if (restored._tag !== "Success") {
+        return reclassifyWindowResult(restored, operation);
+      }
+      const postRestoreForeground = await getForegroundWindow();
+      if (postRestoreForeground._tag !== "Success") {
+        return reclassifyWindowResult(postRestoreForeground, operation);
+      }
+      if (postRestoreForeground.value !== window) {
+        return failure(
+          operation,
+          "The foreground window changed before the move could be applied"
+        );
+      }
+    }
+
+    const moved = await setWindowPosition(window, targetRect.value);
+    if (moved._tag !== "Success") {
+      return reclassifyWindowResult(moved, operation);
+    }
+    return success({
+      rectangle: targetRect.value,
+      sourceMonitorId: source.id,
+      targetMonitorId: target.id,
+      window,
+    });
+  };
+
   return {
     getForegroundWindow,
     getNormalWindowRect,
+    moveForegroundWindow,
     restoreWindow,
     setWindowPosition,
   };

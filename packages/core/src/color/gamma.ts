@@ -1,5 +1,7 @@
 /* oxlint-disable anti-slop/no-runtime-typeof -- The positional overload needs a runtime discriminator. */
 
+import { Data, Effect } from "effect";
+
 /** The supported gamma adjustment range. */
 export const GAMMA_MINIMUM = 0.3;
 
@@ -36,6 +38,21 @@ export const DEFAULT_MONITOR_BRIGHTNESS = 100;
 /** The default hardware monitor contrast value used by Gamma Manager. */
 export const DEFAULT_MONITOR_CONTRAST = 50;
 
+/** The minimum hardware monitor brightness value used by Gamma Manager. */
+export const MONITOR_BRIGHTNESS_MINIMUM = 0;
+
+/** The maximum hardware monitor brightness value used by Gamma Manager. */
+export const MONITOR_BRIGHTNESS_MAXIMUM = 100;
+
+/** The minimum hardware monitor contrast value used by Gamma Manager. */
+export const MONITOR_CONTRAST_MINIMUM = 0;
+
+/** The maximum hardware monitor contrast value used by Gamma Manager. */
+export const MONITOR_CONTRAST_MAXIMUM = 100;
+
+/** The sentinel stored for hardware contrast when a monitor has no contrast control. */
+export const MONITOR_CONTRAST_UNAVAILABLE = -1;
+
 /** The color channels accepted by the gamma ramp. */
 export type RgbChannel = "r" | "g" | "b";
 
@@ -50,6 +67,34 @@ export type RgbControl =
 
 /** The software adjustment groups that can be changed independently. */
 export type ColorAdjustment = "gamma" | "contrast" | "brightness";
+
+/** The hardware monitor adjustment groups that can be requested independently. */
+export type HardwareAdjustment = "brightness" | "contrast";
+
+/** A pure hardware mutation request for the platform boundary to interpret. */
+export type GammaManagerHardwareIntent =
+  | {
+      readonly _tag: "SetMonitorBrightness";
+      /** The legacy display name targeted by the request. */
+      readonly monitor: string;
+      /** The normalized brightness value in the legacy 0–100 range. */
+      readonly value: number;
+    }
+  | {
+      readonly _tag: "SetMonitorContrast";
+      /** The legacy display name targeted by the request. */
+      readonly monitor: string;
+      /** The normalized contrast value in the legacy 0–100 range. */
+      readonly value: number;
+    };
+
+/** The result of planning a hardware setting change without applying it. */
+export interface GammaManagerHardwareChange {
+  /** The immutable settings after recording the requested value. */
+  readonly settings: GammaManagerSettings;
+  /** The platform-independent intent to apply at an outer boundary. */
+  readonly intent: GammaManagerHardwareIntent;
+}
 
 /** The input values used to construct a three-channel gamma ramp. */
 export interface GammaRampParameters {
@@ -111,6 +156,18 @@ export interface GammaManagerSettingsInput {
   readonly monitorContrast?: number;
 }
 
+/** A typed failure for an invalid persisted Gamma Manager preset. */
+export class InvalidGammaManagerSettings extends Data.TaggedError(
+  "InvalidGammaManagerSettings"
+)<{
+  /** The setting field containing the invalid value. */
+  readonly field: string;
+  /** The rejected value. */
+  readonly value: number | string;
+  /** A stable description of the invariant failure. */
+  readonly reason: string;
+}> {}
+
 /** Options controlling the contrast ceiling used when building a ramp. */
 export interface GammaRampOptions {
   /** Permit the legacy extreme contrast range up to `100`. */
@@ -141,6 +198,9 @@ export const DEFAULT_GAMMA_MANAGER_SETTINGS: Readonly<GammaManagerSettings> =
 export const DEFAULT_GAMMA_SETTINGS = DEFAULT_GAMMA_MANAGER_SETTINGS;
 
 const clamp = (value: number, minimum: number, maximum: number): number => {
+  if (Number.isNaN(value)) {
+    return minimum;
+  }
   if (value < minimum) {
     return minimum;
   }
@@ -166,6 +226,22 @@ export const clampBrightness = (value: number): number =>
     legacyFloat(value),
     legacyFloat(BRIGHTNESS_MINIMUM),
     legacyFloat(BRIGHTNESS_MAXIMUM)
+  );
+
+/** Clamp a hardware monitor brightness value to Gamma Manager’s 0–100 range. */
+export const clampMonitorBrightness = (value: number): number =>
+  clamp(
+    legacyFloat(value),
+    legacyFloat(MONITOR_BRIGHTNESS_MINIMUM),
+    legacyFloat(MONITOR_BRIGHTNESS_MAXIMUM)
+  );
+
+/** Clamp a hardware monitor contrast value to Gamma Manager’s 0–100 range. */
+export const clampMonitorContrast = (value: number): number =>
+  clamp(
+    legacyFloat(value),
+    legacyFloat(MONITOR_CONTRAST_MINIMUM),
+    legacyFloat(MONITOR_CONTRAST_MAXIMUM)
   );
 
 /** Clamp a contrast value using either the normal or extreme ceiling. */
@@ -212,6 +288,147 @@ export const makeGammaManagerSettings = (
 /** Return a fresh preset containing the legacy Gamma Manager reset values. */
 export const resetGammaManagerSettings = (monitor = ""): GammaManagerSettings =>
   createDefaultGammaManagerSettings(monitor);
+
+const invalidSettings = (
+  field: string,
+  value: number | string,
+  reason: string
+): Effect.Effect<never, InvalidGammaManagerSettings> =>
+  Effect.fail(new InvalidGammaManagerSettings({ field, reason, value }));
+
+const validateNumber = (
+  field: string,
+  value: number,
+  minimum: number,
+  maximum: number
+): Effect.Effect<void, InvalidGammaManagerSettings> => {
+  if (!Number.isFinite(value)) {
+    return invalidSettings(field, value, "Value must be finite");
+  }
+  if (value < minimum || value > maximum) {
+    return invalidSettings(
+      field,
+      value,
+      `Value must be between ${minimum} and ${maximum}`
+    );
+  }
+  return Effect.void;
+};
+
+/**
+ * Validate and normalize a complete persisted preset.
+ *
+ * Hardware contrast may be `-1` to preserve the legacy sentinel for an
+ * internal display without a contrast control. All other persisted values use
+ * the ranges documented by Gamma Manager. The returned value is safe to pass
+ * to the pure adjustment operations.
+ *
+ * @param settings - The candidate complete preset.
+ * @returns An Effect containing normalized settings or a typed validation error.
+ */
+export const validateGammaManagerSettings = (
+  settings: GammaManagerSettings
+): Effect.Effect<GammaManagerSettings, InvalidGammaManagerSettings> =>
+  Effect.gen(function* validateSettingsEffect() {
+    if (
+      typeof settings.monitor !== "string" ||
+      settings.monitor.trim() === ""
+    ) {
+      return yield* invalidSettings(
+        "monitor",
+        settings.monitor,
+        "Monitor name must be a non-empty string"
+      );
+    }
+
+    yield* validateNumber(
+      "rGamma",
+      settings.rGamma,
+      GAMMA_MINIMUM,
+      GAMMA_MAXIMUM
+    );
+    yield* validateNumber(
+      "gGamma",
+      settings.gGamma,
+      GAMMA_MINIMUM,
+      GAMMA_MAXIMUM
+    );
+    yield* validateNumber(
+      "bGamma",
+      settings.bGamma,
+      GAMMA_MINIMUM,
+      GAMMA_MAXIMUM
+    );
+    yield* validateNumber(
+      "rContrast",
+      settings.rContrast,
+      CONTRAST_MINIMUM,
+      EXTREME_CONTRAST_MAXIMUM
+    );
+    yield* validateNumber(
+      "gContrast",
+      settings.gContrast,
+      CONTRAST_MINIMUM,
+      EXTREME_CONTRAST_MAXIMUM
+    );
+    yield* validateNumber(
+      "bContrast",
+      settings.bContrast,
+      CONTRAST_MINIMUM,
+      EXTREME_CONTRAST_MAXIMUM
+    );
+    yield* validateNumber(
+      "rBright",
+      settings.rBright,
+      BRIGHTNESS_MINIMUM,
+      BRIGHTNESS_MAXIMUM
+    );
+    yield* validateNumber(
+      "gBright",
+      settings.gBright,
+      BRIGHTNESS_MINIMUM,
+      BRIGHTNESS_MAXIMUM
+    );
+    yield* validateNumber(
+      "bBright",
+      settings.bBright,
+      BRIGHTNESS_MINIMUM,
+      BRIGHTNESS_MAXIMUM
+    );
+    yield* validateNumber(
+      "monitorBrightness",
+      settings.monitorBrightness,
+      MONITOR_BRIGHTNESS_MINIMUM,
+      MONITOR_BRIGHTNESS_MAXIMUM
+    );
+    if (settings.monitorContrast !== MONITOR_CONTRAST_UNAVAILABLE) {
+      yield* validateNumber(
+        "monitorContrast",
+        settings.monitorContrast,
+        MONITOR_CONTRAST_MINIMUM,
+        MONITOR_CONTRAST_MAXIMUM
+      );
+    }
+    if (!Number.isInteger(settings.monitorBrightness)) {
+      return yield* invalidSettings(
+        "monitorBrightness",
+        settings.monitorBrightness,
+        "Hardware brightness must be an integer"
+      );
+    }
+    if (
+      settings.monitorContrast !== MONITOR_CONTRAST_UNAVAILABLE &&
+      !Number.isInteger(settings.monitorContrast)
+    ) {
+      return yield* invalidSettings(
+        "monitorContrast",
+        settings.monitorContrast,
+        "Hardware contrast must be an integer"
+      );
+    }
+
+    return { ...settings, monitor: settings.monitor.trim() };
+  });
 
 const channelsForControl = (control: RgbControl): readonly RgbChannel[] => {
   if (control === "linked" || control === "all") {
@@ -281,6 +498,91 @@ export const setRgbAdjustment = (
   }
   return updated;
 };
+
+/** Read one software adjustment for a linked or independent RGB selection. */
+export const getRgbAdjustment = (
+  settings: GammaManagerSettings,
+  adjustment: ColorAdjustment,
+  control: RgbControl
+): number => {
+  let values: readonly [number, number, number];
+  if (adjustment === "gamma") {
+    values = [settings.rGamma, settings.gGamma, settings.bGamma];
+  } else if (adjustment === "contrast") {
+    values = [settings.rContrast, settings.gContrast, settings.bContrast];
+  } else {
+    values = [settings.rBright, settings.gBright, settings.bBright];
+  }
+  if (control === "linked" || control === "all") {
+    return (values[0] + values[1] + values[2]) / 3;
+  }
+  if (control === "red" || control === "r") {
+    return values[0];
+  }
+  if (control === "green" || control === "g") {
+    return values[1];
+  }
+  return values[2];
+};
+
+/** Alias emphasizing that RGB edits are software gamma-ramp adjustments. */
+export const setSoftwareAdjustment = setRgbAdjustment;
+
+/** Record a hardware monitor brightness change without performing I/O. */
+export const setMonitorBrightness = (
+  settings: GammaManagerSettings,
+  value: number
+): GammaManagerSettings => ({
+  ...settings,
+  monitorBrightness: clampMonitorBrightness(value),
+});
+
+/** Record a hardware monitor contrast change without performing I/O. */
+export const setMonitorContrast = (
+  settings: GammaManagerSettings,
+  value: number
+): GammaManagerSettings => ({
+  ...settings,
+  monitorContrast: clampMonitorContrast(value),
+});
+
+/** Record a hardware monitor change using a named brightness or contrast control. */
+export const setHardwareAdjustment = (
+  settings: GammaManagerSettings,
+  adjustment: HardwareAdjustment,
+  value: number
+): GammaManagerSettings =>
+  adjustment === "brightness"
+    ? setMonitorBrightness(settings, value)
+    : setMonitorContrast(settings, value);
+
+/** Build a tagged hardware intent for an outer platform adapter to apply. */
+export const makeHardwareAdjustmentIntent = (
+  settings: GammaManagerSettings,
+  adjustment: HardwareAdjustment,
+  value: number
+): GammaManagerHardwareIntent =>
+  adjustment === "brightness"
+    ? {
+        _tag: "SetMonitorBrightness",
+        monitor: settings.monitor,
+        value: clampMonitorBrightness(value),
+      }
+    : {
+        _tag: "SetMonitorContrast",
+        monitor: settings.monitor,
+        value: clampMonitorContrast(value),
+      };
+
+/** Plan a hardware change as immutable state plus a platform intent. */
+export const planHardwareAdjustment = (
+  settings: GammaManagerSettings,
+  adjustment: HardwareAdjustment,
+  value: number
+): GammaManagerHardwareChange => ({
+  intent: makeHardwareAdjustmentIntent(settings, adjustment, value),
+  settings: setHardwareAdjustment(settings, adjustment, value),
+});
 
 const rampChannel = (
   gammaInput: number,

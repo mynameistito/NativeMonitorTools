@@ -5,12 +5,21 @@ import { makeDisplayMode } from "../src/display-mode";
 import {
   makeSystemSnapAreaGroups,
   makeSystemSnapAreas,
+  makeSystemSnapAreasForTopology,
+  makeUserDefinedSnapAreas,
 } from "../src/dmt/snap-areas";
 import {
+  DuplicateUserDefinedAreaIndex,
+  InvalidUserDefinedAreaStore,
   InvalidUserDefinedArea,
   MAX_USER_DEFINED_AREAS,
   UserDefinedAreaLimitExceeded,
+  makeUserDefinedAreaStore,
   makeUserDefinedAreas,
+  parseUserDefinedAreaStore,
+  removeUserDefinedArea,
+  serializeUserDefinedAreaStore,
+  setUserDefinedArea,
 } from "../src/dmt/user-areas";
 import { makeMonitorSnapshot, makeMonitorTopology } from "../src/monitor";
 import type { MonitorSnapshot, MonitorTopology } from "../src/monitor";
@@ -109,6 +118,25 @@ describe("DMT system snap areas", () => {
     expect(groups[0]?.areas).toHaveLength(9);
     expect(groups[1]?.monitorId).toBe(id("left"));
   });
+
+  it("adds the SDA0 supersize target over the virtual working area", () => {
+    const primary = monitor("primary", "Primary", 1920, 0, 2560, 1440, true);
+    const left = monitor("left", "Left", -1920, 0, 1920, 1080, false);
+    const areas = makeSystemSnapAreasForTopology(topology([left, primary]));
+
+    expect(areas[0]).toMatchObject({
+      id: "SDA0",
+      kind: "SuperSize",
+      name: "Super size",
+      source: "System",
+    });
+    expect(areas[0]?.rect).toEqual({
+      height: 1400,
+      width: 6380,
+      x: -1910,
+      y: 20,
+    });
+  });
 });
 
 describe("DMT user-defined areas", () => {
@@ -139,5 +167,103 @@ describe("DMT user-defined areas", () => {
       ])
     );
     expect(invalidRect).toBeInstanceOf(InvalidUserDefinedArea);
+  });
+
+  it("round-trips sparse slots and maps them to stable UDA snap targets", () => {
+    const store = run(
+      makeUserDefinedAreaStore({
+        areas: [
+          {
+            index: 4,
+            name: "Fourth",
+            rect: { height: 100, width: 200, x: 400, y: 0 },
+          },
+          {
+            index: 1,
+            name: "Second",
+            rect: { height: 80, width: 160, x: 100, y: 20 },
+          },
+        ],
+        version: 1,
+      })
+    );
+
+    expect(store.areas.map((area) => area.index)).toEqual([1, 4]);
+    expect(makeUserDefinedSnapAreas(store.areas)).toMatchObject([
+      { id: "UDA1", name: "Second", source: "User" },
+      { id: "UDA4", name: "Fourth", source: "User" },
+    ]);
+
+    const serialized = serializeUserDefinedAreaStore(store);
+    expect(run(parseUserDefinedAreaStore(serialized))).toEqual(store);
+  });
+
+  it("rejects malformed stores and duplicate sparse slots", () => {
+    expect(failure(parseUserDefinedAreaStore("{not json"))).toBeInstanceOf(
+      InvalidUserDefinedAreaStore
+    );
+    expect(
+      failure(
+        parseUserDefinedAreaStore(
+          JSON.stringify({
+            areas: [
+              {
+                name: 42,
+                rect: { height: 10, width: 10, x: 0, y: 0 },
+              },
+            ],
+            version: 1,
+          })
+        )
+      )
+    ).toBeInstanceOf(InvalidUserDefinedAreaStore);
+    expect(
+      failure(makeUserDefinedAreaStore({ areas: [], version: 2 }))
+    ).toBeInstanceOf(InvalidUserDefinedAreaStore);
+
+    const duplicate = failure(
+      makeUserDefinedAreaStore({
+        areas: [
+          {
+            index: 2,
+            name: "First",
+            rect: { height: 10, width: 10, x: 0, y: 0 },
+          },
+          {
+            index: 2,
+            name: "Second",
+            rect: { height: 10, width: 10, x: 1, y: 1 },
+          },
+        ],
+      })
+    );
+    expect(duplicate).toBeInstanceOf(DuplicateUserDefinedAreaIndex);
+  });
+
+  it("updates and removes slots without mutating the original store", () => {
+    const store = run(
+      makeUserDefinedAreaStore([
+        {
+          index: 1,
+          name: "Original",
+          rect: { height: 100, width: 200, x: 0, y: 0 },
+        },
+      ])
+    );
+    const updated = run(
+      setUserDefinedArea(
+        store,
+        {
+          name: "Replacement",
+          rect: { height: 120, width: 220, x: 10, y: 10 },
+        },
+        1
+      )
+    );
+
+    expect(store.areas[0]?.name).toBe("Original");
+    expect(updated.areas[0]?.name).toBe("Replacement");
+    expect(removeUserDefinedArea(updated, 1).areas).toEqual([]);
+    expect(updated.areas).toHaveLength(1);
   });
 });

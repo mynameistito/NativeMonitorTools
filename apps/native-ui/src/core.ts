@@ -2,6 +2,8 @@ import { Cmd, asciiBytes, utf8Bytes } from "@native-sdk/core";
 import type { StatusItemState } from "@native-sdk/core/events";
 import { backendRequest } from "@native-sdk/services";
 
+/* oxlint-disable eslint/func-style -- Native SDK module-level core functions must remain declarations for subset checking and number-slot inference. */
+
 export type Bytes = Uint8Array;
 export type Section =
   | "displays"
@@ -142,6 +144,7 @@ const WINDOW_SNAP_FRAME_KIND = 7;
 const WINDOW_SNAP_OPERATION = 7;
 const ERROR_FRAME_KIND = 255;
 const MAX_IPC_ITEMS = 64;
+const COLOR_SET_KEY = "ipc.color.set";
 const EMPTY_BYTES = asciiBytes("");
 
 const NO_MODIFIERS = {
@@ -245,6 +248,16 @@ interface ReadBytes {
   readonly next: number;
 }
 
+interface DecodedColor {
+  readonly next: number;
+  readonly value: ColorMonitorCard;
+}
+
+function isU16(value: number): boolean {
+  return value >= 0 && value <= 65_535;
+}
+
+// oxlint-disable-next-line eslint/func-style -- Native SDK integer-flow analysis recognizes this parser helper as an integer-returning function declaration.
 function toWhole(value: number): number {
   if (value >= 0) {
     return Math.trunc(value);
@@ -252,10 +265,12 @@ function toWhole(value: number): number {
   return 0;
 }
 
+// oxlint-disable-next-line eslint/func-style -- Native SDK integer-flow analysis recognizes this parser helper as an integer-returning function declaration.
 function readU16(bytes: Bytes, offset: number): number {
   return toWhole((bytes[offset] ?? 0) + (bytes[offset + 1] ?? 0) * 256);
 }
 
+/* oxlint-disable eslint/no-bitwise -- Native SDK byte framing requires integer-preserving bit packing. */
 function encodeBackendRequest(kind: number, name: Bytes): Bytes {
   return new Uint8Array([
     IPC_PROTOCOL_VERSION,
@@ -266,6 +281,7 @@ function encodeBackendRequest(kind: number, name: Bytes): Bytes {
   ]);
 }
 
+// oxlint-disable-next-line eslint/func-style -- Native SDK integer-flow analysis recognizes this parser helper's offsets as whole numbers.
 function readBytes(bytes: Bytes, offset: number): ReadBytes | null {
   if (offset + 2 > bytes.length) {
     return null;
@@ -365,6 +381,7 @@ function decodeProfileFrame(payload: Bytes): readonly ProfilePreview[] | null {
     }
     offset = summary.next;
     const monitorCount = readU16(payload, offset);
+    // oxlint-disable-next-line sonarjs/no-inverted-boolean-check -- Native SDK integer-flow analysis requires this ordered NaN exclusion before the integer boundary.
     if (!(monitorCount >= 0)) {
       return null;
     }
@@ -400,13 +417,8 @@ function readColorLevel(
     const minimum = Math.trunc(readU16(payload, offset + 1));
     const current = Math.trunc(readU16(payload, offset + 3));
     const maximum = Math.trunc(readU16(payload, offset + 5));
-    if (
-      !(minimum >= 0 && minimum <= 65_535) ||
-      !(current >= 0 && current <= 65_535) ||
-      !(maximum >= 0 && maximum <= 65_535) ||
-      minimum > current ||
-      current > maximum
-    ) {
+    const validValues = isU16(minimum) && isU16(current) && isU16(maximum);
+    if (!validValues || minimum > current || current > maximum) {
       return null;
     }
     return {
@@ -438,6 +450,92 @@ function readColorLevel(
       };
 }
 
+// oxlint-disable-next-line eslint/complexity, sonarjs/cognitive-complexity -- The Native SDK parser keeps protocol validation and integer-proof guards together at the object boundary.
+function decodeColorItem(payload: Bytes, start: number): DecodedColor | null {
+  let offset = start;
+  const id = readBytes(payload, offset);
+  if (id === null || id.value.length === 0) {
+    return null;
+  }
+  offset = id.next;
+  const displayName = readBytes(payload, offset);
+  if (
+    displayName === null ||
+    displayName.value.length === 0 ||
+    displayName.next + 1 > payload.length
+  ) {
+    return null;
+  }
+  offset = displayName.next;
+  const gammaSupported = payload[offset] === 1;
+  if (payload[offset] !== 0 && !gammaSupported) {
+    return null;
+  }
+  offset += 1;
+  let gammaReason = EMPTY_BYTES;
+  if (!gammaSupported) {
+    const reason = readBytes(payload, offset);
+    if (reason === null || reason.value.length === 0) {
+      return null;
+    }
+    gammaReason = reason.value;
+    offset = reason.next;
+  }
+  const brightness = readColorLevel(payload, offset);
+  if (brightness === null) {
+    return null;
+  }
+  offset = brightness.next;
+  const contrast = readColorLevel(payload, offset);
+  if (contrast === null) {
+    return null;
+  }
+  const brightnessCurrentValue = brightness.value.current;
+  const brightnessMaximumValue = brightness.value.maximum;
+  const brightnessMinimumValue = brightness.value.minimum;
+  const contrastCurrentValue = contrast.value.current;
+  const contrastMaximumValue = contrast.value.maximum;
+  const contrastMinimumValue = contrast.value.minimum;
+  if (!(brightnessCurrentValue >= 0 && brightnessCurrentValue <= 65_535)) {
+    return null;
+  }
+  if (!(brightnessMaximumValue >= 0 && brightnessMaximumValue <= 65_535)) {
+    return null;
+  }
+  if (!(brightnessMinimumValue >= 0 && brightnessMinimumValue <= 65_535)) {
+    return null;
+  }
+  if (!(contrastCurrentValue >= 0 && contrastCurrentValue <= 65_535)) {
+    return null;
+  }
+  if (!(contrastMaximumValue >= 0 && contrastMaximumValue <= 65_535)) {
+    return null;
+  }
+  if (!(contrastMinimumValue >= 0 && contrastMinimumValue <= 65_535)) {
+    return null;
+  }
+  offset = contrast.next;
+  return {
+    next: offset,
+    value: {
+      brightnessCurrent: Math.trunc(brightnessCurrentValue),
+      brightnessMaximum: Math.trunc(brightnessMaximumValue),
+      brightnessMinimum: Math.trunc(brightnessMinimumValue),
+      brightnessReason: brightness.value.reason,
+      brightnessSupported: brightness.value.supported,
+      contrastCurrent: Math.trunc(contrastCurrentValue),
+      contrastMaximum: Math.trunc(contrastMaximumValue),
+      contrastMinimum: Math.trunc(contrastMinimumValue),
+      contrastReason: contrast.value.reason,
+      contrastSupported: contrast.value.supported,
+      displayName: displayName.value,
+      gammaReason,
+      gammaSupported,
+      id: id.value,
+    },
+  };
+}
+
 function decodeColorFrame(payload: Bytes): readonly ColorMonitorCard[] | null {
   if (
     payload.length < 4 ||
@@ -453,82 +551,12 @@ function decodeColorFrame(payload: Bytes): readonly ColorMonitorCard[] | null {
   let offset = 4;
   const colors: ColorMonitorCard[] = [];
   for (let index = 0; index < count; index += 1) {
-    const id = readBytes(payload, offset);
-    if (id === null || id.value.length === 0) {
+    const color = decodeColorItem(payload, offset);
+    if (color === null) {
       return null;
     }
-    offset = id.next;
-    const displayName = readBytes(payload, offset);
-    if (
-      displayName === null ||
-      displayName.value.length === 0 ||
-      displayName.next + 1 > payload.length
-    ) {
-      return null;
-    }
-    offset = displayName.next;
-    const gammaSupported = payload[offset] === 1;
-    if (payload[offset] !== 0 && !gammaSupported) {
-      return null;
-    }
-    offset += 1;
-    let gammaReason = EMPTY_BYTES;
-    if (!gammaSupported) {
-      const reason = readBytes(payload, offset);
-      if (reason === null || reason.value.length === 0) {
-        return null;
-      }
-      gammaReason = reason.value;
-      offset = reason.next;
-    }
-    const brightness = readColorLevel(payload, offset);
-    if (brightness === null) {
-      return null;
-    }
-    offset = brightness.next;
-    const contrast = readColorLevel(payload, offset);
-    if (contrast === null) {
-      return null;
-    }
-    offset = contrast.next;
-    const brightnessCurrentValue = brightness.value.current;
-    const brightnessMaximumValue = brightness.value.maximum;
-    const brightnessMinimumValue = brightness.value.minimum;
-    const contrastCurrentValue = contrast.value.current;
-    const contrastMaximumValue = contrast.value.maximum;
-    const contrastMinimumValue = contrast.value.minimum;
-    if (
-      !(brightnessCurrentValue >= 0 && brightnessCurrentValue <= 65_535) ||
-      !(brightnessMaximumValue >= 0 && brightnessMaximumValue <= 65_535) ||
-      !(brightnessMinimumValue >= 0 && brightnessMinimumValue <= 65_535) ||
-      !(contrastCurrentValue >= 0 && contrastCurrentValue <= 65_535) ||
-      !(contrastMaximumValue >= 0 && contrastMaximumValue <= 65_535) ||
-      !(contrastMinimumValue >= 0 && contrastMinimumValue <= 65_535)
-    ) {
-      return null;
-    }
-    const brightnessCurrent = Math.trunc(brightnessCurrentValue);
-    const brightnessMaximum = Math.trunc(brightnessMaximumValue);
-    const brightnessMinimum = Math.trunc(brightnessMinimumValue);
-    const contrastCurrent = Math.trunc(contrastCurrentValue);
-    const contrastMaximum = Math.trunc(contrastMaximumValue);
-    const contrastMinimum = Math.trunc(contrastMinimumValue);
-    colors.push({
-      brightnessCurrent,
-      brightnessMaximum,
-      brightnessMinimum,
-      brightnessReason: brightness.value.reason,
-      brightnessSupported: brightness.value.supported,
-      contrastCurrent,
-      contrastMaximum,
-      contrastMinimum,
-      contrastReason: contrast.value.reason,
-      contrastSupported: contrast.value.supported,
-      displayName: displayName.value,
-      gammaReason,
-      gammaSupported,
-      id: id.value,
-    });
+    offset = color.next;
+    colors.push(color.value);
   }
   return offset === payload.length ? colors : null;
 }
@@ -703,18 +731,18 @@ function mergeColorStates(
   updates: readonly ColorMonitorCard[]
 ): readonly ColorMonitorCard[] {
   const merged: ColorMonitorCard[] = [...existing];
-  for (const update of updates) {
+  for (const colorUpdate of updates) {
     let replaced = false;
     for (let index = 0; index < merged.length; index += 1) {
       const current = merged[index];
-      if (current !== undefined && sameBytes(current.id, update.id)) {
-        merged[index] = update;
+      if (current !== undefined && sameBytes(current.id, colorUpdate.id)) {
+        merged[index] = colorUpdate;
         replaced = true;
         break;
       }
     }
     if (!replaced) {
-      merged.push(update);
+      merged.push(colorUpdate);
     }
   }
   return merged;
@@ -782,6 +810,7 @@ function encodeWindowSnapRequest(monitorId: Bytes, areaId: Bytes): Bytes {
     ...areaId,
   ]);
 }
+/* oxlint-enable eslint/no-bitwise */
 
 function findProfile(
   profiles: readonly ProfilePreview[],
@@ -825,7 +854,9 @@ function withPreview(model: Model, profile: ProfilePreview | null): Model {
   };
 }
 
+// oxlint-disable-next-line eslint/complexity, sonarjs/cognitive-complexity -- The Native SDK update contract keeps all message transitions exhaustive in one reducer; splitting it would risk changing command and failure routing.
 export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
+  // oxlint-disable-next-line sonarjs/max-switch-cases -- The discriminated Msg union intentionally has one branch per Native SDK event.
   switch (msg.kind) {
     case "show_displays": {
       return { ...model, section: "displays" };
@@ -1224,7 +1255,7 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
         { ...model, lastError: EMPTY_BYTES, settingColor: true },
         backendRequest(encodeColorSetRequest(msg.id, 1, 1), {
           err: "color_set_failed",
-          key: "ipc.color.set",
+          key: COLOR_SET_KEY,
           ok: "color_set_completed",
         }),
       ];
@@ -1242,7 +1273,7 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
         { ...model, lastError: EMPTY_BYTES, settingColor: true },
         backendRequest(encodeColorSetRequest(msg.id, 2, value), {
           err: "color_set_failed",
-          key: "ipc.color.set",
+          key: COLOR_SET_KEY,
           ok: "color_set_completed",
         }),
       ];
@@ -1257,7 +1288,7 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
         { ...model, lastError: EMPTY_BYTES, settingColor: true },
         backendRequest(encodeColorSetRequest(msg.id, 3, value), {
           err: "color_set_failed",
-          key: "ipc.color.set",
+          key: COLOR_SET_KEY,
           ok: "color_set_completed",
         }),
       ];
@@ -1307,6 +1338,9 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
     }
     case "quit_app": {
       return [model, Cmd.quitApp()];
+    }
+    default: {
+      return model;
     }
   }
 }

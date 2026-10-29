@@ -12,14 +12,20 @@ export {
 export {
   encodeMagicWordParameter,
   expandMagicWord,
+  expandMagicWordEntry,
+  expandMagicWordFields,
   expandMagicWords,
+  expandMagicWordWithReport,
   findMagicWordByAlias,
   findMagicWordsByAlias,
   getAutoCompleteWords,
   getMagicWordCompletions,
+  getMagicWordParameterRequirements,
   matchMagicWordPrefix,
+  mergeMagicWords,
   parseMagicWord,
   parseMagicWords,
+  collectMagicWordParameters,
 } from "./magic-words";
 export type {
   MagicParameter,
@@ -27,17 +33,32 @@ export type {
   MagicParameterValues,
   MagicWord,
   MagicWordExpansionOptions,
+  MagicWordExpansionResult,
+  MagicWordParameterRequirement,
   MagicWordToken,
 } from "./magic-words";
 export {
   CursorPointUnavailable,
   monitorForCursorPoint,
+  nearestMonitorForCursorPoint,
+  planCursorBarriers,
+  planCursorToPrimaryMonitor,
   planCursorRoute,
   routeCursorPoint,
+  routeCursorToNextMonitor,
+  routeCursorToPreviousMonitor,
+  routeCursorToPrimaryMonitor,
   routeCursorToMonitor,
 } from "./cursor-routing";
-export type { CursorRoutingError, CursorRoutingResult } from "./cursor-routing";
+export type {
+  CursorBarrierDirection,
+  CursorBarrierPlan,
+  CursorRoutingError,
+  CursorRoutingResult,
+} from "./cursor-routing";
 export {
+  InvalidMonitorOffset,
+  monitorAtOffset,
   nextMonitor,
   previousMonitor,
   selectMonitorAtOffset,
@@ -49,11 +70,14 @@ export {
   makeSystemSnapAreaGroups,
   makeSystemSnapAreas,
   makeSystemSnapAreasForTopology,
+  makeSuperSizeSnapArea,
+  makeUserDefinedSnapAreas,
   systemDefinedSnapAreaGroups,
   systemDefinedSnapAreas,
   systemSnapAreaGroups,
   systemSnapAreas,
   systemSnapAreasForTopology,
+  userDefinedSnapAreas,
   usableMonitorArea,
 } from "./snap-areas";
 export type {
@@ -72,8 +96,31 @@ export {
   MAX_USER_DEFINED_AREAS,
   InvalidUserDefinedArea,
   UserDefinedAreaLimitExceeded,
+  DuplicateUserDefinedAreaIndex,
+  EMPTY_USER_AREA_STORE,
+  findUserArea,
+  findUserDefinedArea,
+  InvalidUserDefinedAreaStore,
+  makeUserAreaStore,
+  makeUserDefinedAreaStore,
+  parseUserAreaStore,
+  parseUserDefinedAreaStore,
+  removeUserArea,
+  removeUserDefinedArea,
+  serializeUserAreaStore,
+  serializeUserDefinedAreaStore,
+  setUserArea,
+  setUserDefinedArea,
+  USER_AREA_STORE_VERSION,
 } from "./user-areas";
-export type { UserDefinedArea, UserDefinedAreaInput } from "./user-areas";
+export type {
+  UserAreaStoreAreaInput,
+  UserDefinedArea,
+  UserDefinedAreaInput,
+  UserDefinedAreaStore,
+  UserDefinedAreaStoreError,
+  UserDefinedAreaStoreInput,
+} from "./user-areas";
 export {
   clampRect,
   clampRectToUsableArea,

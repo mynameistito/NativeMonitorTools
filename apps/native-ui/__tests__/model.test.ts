@@ -1,3 +1,5 @@
+import { test } from "bun:test";
+
 import { initialModel, update } from "../src/core.ts";
 
 const assert = (condition: boolean, message: string): void => {
@@ -178,14 +180,13 @@ assert(
   "a failed window snap should clear the busy state"
 );
 assert(
-  snapFailure.lastError.length === 5 &&
-    snapFailure.lastError[0] === 69 &&
-    snapFailure.lastError[1] === 114 &&
-    snapFailure.lastError[2] === 114 &&
-    snapFailure.lastError[3] === 111 &&
-    snapFailure.lastError[4] === 114,
+  String.fromCodePoint(...snapFailure.lastError) === "Error",
   "a window snap error frame should expose the backend reason"
 );
+
+test("native UI model keeps its initial section", () => {
+  assert(initialModel().section === "displays", "the model starts on displays");
+});
 
 const unsupportedColorsResult = update(loadedDisplay, {
   kind: "colors_loaded",

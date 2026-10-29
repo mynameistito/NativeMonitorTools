@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  clampMonitorBrightness,
+  clampMonitorContrast,
   createDefaultGammaManagerSettings,
   createGammaRamp,
   EXTREME_CONTRAST_MAXIMUM,
+  getRgbAdjustment,
   makeGammaManagerSettings,
+  planHardwareAdjustment,
   resetGammaManagerSettings,
+  setHardwareAdjustment,
   setRgbAdjustment,
 } from "../src/color";
 
@@ -129,5 +134,42 @@ describe("Gamma Manager ramp compatibility", () => {
 
     expect(ramp[0][0]).toBe(3276);
     expect(ramp[0][1]).toBe(3532);
+  });
+
+  it("reads linked values as the legacy RGB average and independent values by channel", () => {
+    const settings = makeGammaManagerSettings({
+      bBright: 0.3,
+      bContrast: 1.3,
+      bGamma: 1.3,
+      gBright: 0.2,
+      gContrast: 1.2,
+      gGamma: 1.2,
+      rBright: 0.1,
+      rContrast: 1.1,
+      rGamma: 1.1,
+    });
+
+    expect(getRgbAdjustment(settings, "gamma", "linked")).toBeCloseTo(1.2);
+    expect(getRgbAdjustment(settings, "contrast", "green")).toBe(1.2);
+    expect(getRgbAdjustment(settings, "brightness", "b")).toBe(0.3);
+  });
+
+  it("records hardware settings and produces tagged, clamped intents without mutation", () => {
+    const settings = createDefaultGammaManagerSettings("Display 1");
+    const brightness = setHardwareAdjustment(settings, "brightness", 120);
+    const contrast = setHardwareAdjustment(settings, "contrast", -10);
+    const planned = planHardwareAdjustment(settings, "contrast", 70);
+
+    expect(clampMonitorBrightness(-1)).toBe(0);
+    expect(clampMonitorContrast(101)).toBe(100);
+    expect(settings.monitorBrightness).toBe(100);
+    expect(brightness.monitorBrightness).toBe(100);
+    expect(contrast.monitorContrast).toBe(0);
+    expect(planned.settings.monitorContrast).toBe(70);
+    expect(planned.intent).toEqual({
+      _tag: "SetMonitorContrast",
+      monitor: "Display 1",
+      value: 70,
+    });
   });
 });

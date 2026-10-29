@@ -66,12 +66,22 @@ export type {
   BrightnessContrastCapabilities,
   ExternalLevelCapability,
   GammaRamp,
+  WindowsDisplayNativeApi,
   WindowsDisplay,
   WindowsDisplayDiscovery,
   WindowsDisplayIdentity,
   WindowsDisplayPort,
+  WindowsDisplayPortOptions,
+  WindowsNativeDisplayMode,
+  WindowsNativeDisplayRecord,
+  WindowsNativeLevelReading,
+  WindowsPhysicalMonitorLease,
   WindowsPlatformOperation,
   WindowsPlatformResult,
+} from "./platform/windows";
+export type {
+  WindowsNativePointer as WindowsDisplayNativePointer,
+  WindowsNativeRect as WindowsDisplayNativeRect,
 } from "./platform/windows";
 export {
   createWindowsWindowPort,
@@ -82,6 +92,9 @@ export type {
   WindowsNativePointer,
   WindowsNativeRect,
   WindowsWindowHandle,
+  WindowsForegroundWindowMoveRequest,
+  WindowsForegroundWindowMoveResult,
+  WindowsWindowMonitorTarget,
   WindowsWindowNativeApi,
   WindowsWindowOperation,
   WindowsWindowPort,
@@ -89,6 +102,22 @@ export type {
   WindowsWindowRect,
   WindowsWindowResult,
 } from "./platform/windows/window";
+export {
+  createWindowsCursorPort,
+  parseCursorClipRect,
+  parseCursorPoint,
+  parseCursorPosition,
+} from "./platform/windows/cursor";
+export type {
+  WindowsCursorLockLease,
+  WindowsCursorNativeApi,
+  WindowsCursorPoint,
+  WindowsCursorPort,
+  WindowsCursorPortOptions,
+  WindowsCursorRect,
+  WindowsCursorOperation,
+  WindowsCursorResult,
+} from "./platform/windows/cursor";
 
 export {
   makeNativeUiApplicationLayer,

@@ -1,6 +1,9 @@
 import { Data, Effect } from "effect";
 
-import { makeGammaManagerSettings } from "./gamma";
+import {
+  makeGammaManagerSettings,
+  validateGammaManagerSettings,
+} from "./gamma";
 import type { GammaManagerSettings } from "./gamma";
 
 /** The parsed sections of a GammaManager.ini document, keyed by section name. */
@@ -172,7 +175,7 @@ const parseSection = (
     );
     const monitorContrast = yield* parseInteger(monitorContrastEntry, section);
 
-    return makeGammaManagerSettings({
+    const settings = makeGammaManagerSettings({
       bBright,
       bContrast,
       bGamma,
@@ -186,6 +189,19 @@ const parseSection = (
       rContrast,
       rGamma,
     });
+
+    return yield* validateGammaManagerSettings(settings).pipe(
+      Effect.mapError(
+        (error) =>
+          new InvalidGammaManagerIni({
+            key: error.field,
+            line: null,
+            reason: error.reason,
+            section,
+            value: String(error.value),
+          })
+      )
+    );
   });
 
 const parseLine = (

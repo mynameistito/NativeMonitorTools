@@ -2,10 +2,12 @@ import { Cause, Effect, Exit, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
+  InvalidGammaManagerSettings,
   InvalidGammaManagerIni,
   makeGammaManagerSettings,
   parseGammaManagerIni,
   serializeGammaManagerIni,
+  validateGammaManagerSettings,
 } from "../src/color";
 
 const run = <A, E>(effect: Effect.Effect<A, E>): A => Effect.runSync(effect);
@@ -115,6 +117,38 @@ describe("GammaManager.ini compatibility", () => {
     expect(malformed.key).toBe("rGamma");
     expect(malformed.section).toBe("DISPLAY: Night");
     expect(unknown.key).toBe("unknown");
+  });
+
+  it("validates persisted ranges while preserving the unavailable contrast sentinel", () => {
+    const invalid = failure(
+      validateGammaManagerSettings(
+        makeGammaManagerSettings({ monitor: "DISPLAY-1", rGamma: 0.2 })
+      )
+    );
+    const normalized = run(
+      validateGammaManagerSettings(
+        makeGammaManagerSettings({
+          monitor: " DISPLAY-1 ",
+          monitorContrast: -1,
+        })
+      )
+    );
+
+    expect(invalid).toBeInstanceOf(InvalidGammaManagerSettings);
+    expect(invalid._tag).toBe("InvalidGammaManagerSettings");
+    expect(invalid.field).toBe("rGamma");
+    expect(normalized.monitor).toBe("DISPLAY-1");
+    expect(normalized.monitorContrast).toBe(-1);
+  });
+
+  it("reports out-of-range preset values as typed INI failures", () => {
+    const invalid = failure(
+      parseGammaManagerIni(ini.replace("rGamma=1,25", "rGamma=0.2"))
+    );
+
+    expect(invalid).toBeInstanceOf(InvalidGammaManagerIni);
+    expect(invalid.key).toBe("rGamma");
+    expect(invalid.section).toBe("DISPLAY: Night");
   });
 
   it("accepts an empty document as an empty preset collection", () => {

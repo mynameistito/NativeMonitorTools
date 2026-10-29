@@ -444,6 +444,55 @@ describe("Native SDK UI IPC", () => {
     expect(writes).toEqual([{ height: 1080, width: 1920, x: 0, y: 0 }]);
   });
 
+  it("rejects a changed foreground window before calling the injected mutation", async () => {
+    const foregroundWindows = [1n, 2n];
+    let setCalls = 0;
+    const windowPort: WindowsWindowPort = {
+      getForegroundWindow: () =>
+        Promise.resolve({
+          _tag: "Success",
+          value: foregroundWindows.shift() ?? 2n,
+        }),
+      getNormalWindowRect: () =>
+        Promise.resolve({
+          _tag: "Success",
+          value: { height: 300, width: 400, x: 20, y: 30 },
+        }),
+      setWindowPosition: () => {
+        setCalls += 1;
+        return Promise.resolve(successfulWindowVoid());
+      },
+    };
+    const { application } = makeFixture(false, null, windowPort);
+    const response = JSON.parse(
+      await handleIpcLine(
+        JSON.stringify({
+          id: "changed-window",
+          method: "window.snap",
+          params: {
+            areaId: "Full",
+            monitorId: "device:test-primary",
+          },
+          version: 1,
+        }),
+        application
+      )
+    );
+
+    expect(response).toMatchObject({
+      error: {
+        code: "BACKEND_ERROR",
+        details: { kind: "error", operation: "setWindowPosition" },
+        message:
+          "The foreground window changed before the snap could be applied",
+      },
+      id: "changed-window",
+      ok: false,
+      version: 1,
+    });
+    expect(setCalls).toBe(0);
+  });
+
   it("returns typed validation errors and never accepts a request without an id", async () => {
     const { application } = makeFixture();
     const missingId = JSON.parse(

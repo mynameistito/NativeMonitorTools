@@ -673,6 +673,19 @@ export const makeNativeUiApplication = (
       if (restoreWindow !== undefined) {
         yield* runWindowOperation("restoreWindow", () => restoreWindow(window));
       }
+      const latestWindow = yield* runWindowOperation(
+        "getForegroundWindow",
+        () => port.getForegroundWindow()
+      );
+      if (latestWindow !== window) {
+        return yield* Effect.fail(
+          adapterError(
+            "error",
+            "setWindowPosition",
+            "The foreground window changed before the snap could be applied"
+          )
+        );
+      }
       yield* runWindowOperation("setWindowPosition", () =>
         port.setWindowPosition(window, plan.targetRect)
       );

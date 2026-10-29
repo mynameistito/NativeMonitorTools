@@ -2,9 +2,11 @@ import type { Rect } from "../geometry";
 import { orderMonitors } from "../monitor";
 import type { MonitorSnapshot, MonitorTopology } from "../monitor";
 import type { MonitorId } from "../monitor-id";
+import type { UserDefinedArea } from "./user-areas";
 
 /** The system-defined shapes understood by the DMT snap commands. */
 export type SnapAreaKind =
+  | "SuperSize"
   | "Full"
   | "LeftHalf"
   | "RightHalf"
@@ -138,6 +140,21 @@ export const makeSystemSnapAreas = (workArea: Rect): readonly SnapArea[] => {
   ];
 };
 
+/**
+ * Build DMT's `SDA0` area covering the virtual working rectangle.
+ *
+ * The legacy implementation uses the bounding rectangle of all monitor work
+ * areas. This deliberately remains a rectangle rather than a union, matching
+ * the coordinates accepted by the later Windows placement adapter.
+ *
+ * @param workArea - The virtual working rectangle.
+ * @returns The supersize system snap area.
+ */
+export const makeSuperSizeSnapArea = (workArea: Rect): SnapArea => ({
+  ...area("SuperSize", "Super size", workArea),
+  id: "SDA0",
+});
+
 /** Alias for callers that use the noun-first DMT terminology. */
 export const systemSnapAreas = makeSystemSnapAreas;
 
@@ -193,12 +210,63 @@ export const systemDefinedSnapAreaGroups = makeSystemSnapAreaGroups;
  * Flatten primary-first system-area groups into one deterministic collection.
  *
  * @param topology - The validated monitor topology.
- * @returns System areas ordered by primary group, then desktop order.
+ * @returns The SDA0 supersize area followed by primary-first monitor areas.
  */
 export const makeSystemSnapAreasForTopology = (
   topology: MonitorTopology
-): readonly SnapArea[] =>
-  makeSystemSnapAreaGroups(topology).flatMap((group) => group.areas);
+): readonly SnapArea[] => {
+  const workAreas = topology.monitors.map(usableMonitorArea);
+  const [first, ...remaining] = workAreas;
+  if (first === undefined) {
+    return [];
+  }
+
+  let left = first.x;
+  let top = first.y;
+  let right = first.x + first.width;
+  let bottom = first.y + first.height;
+  for (const workArea of remaining) {
+    left = Math.min(left, workArea.x);
+    top = Math.min(top, workArea.y);
+    right = Math.max(right, workArea.x + workArea.width);
+    bottom = Math.max(bottom, workArea.y + workArea.height);
+  }
+  const virtualWorkArea: Rect = {
+    height: bottom - top,
+    width: right - left,
+    x: left,
+    y: top,
+  };
+
+  return [
+    makeSuperSizeSnapArea(virtualWorkArea),
+    ...makeSystemSnapAreaGroups(topology).flatMap((group) => group.areas),
+  ];
+};
 
 /** Alias for the flattened topology operation. */
 export const systemSnapAreasForTopology = makeSystemSnapAreasForTopology;
+
+/**
+ * Convert validated DMT user areas into snap-area targets.
+ *
+ * User-area identities are slot-based (`UDA0` through `UDA99`) and do not
+ * include a monitor name, so renaming or reordering monitors cannot change a
+ * persisted user-area identity.
+ *
+ * @param areas - Validated user areas.
+ * @returns User snap areas in their supplied slot order.
+ */
+export const makeUserDefinedSnapAreas = (
+  areas: readonly UserDefinedArea[]
+): readonly SnapArea[] =>
+  areas.map((userArea) => ({
+    id: `UDA${userArea.index}`,
+    kind: "User",
+    name: userArea.name,
+    rect: copyRect(userArea.rect),
+    source: "User",
+  }));
+
+/** Alias using the shorter user-area terminology. */
+export const userDefinedSnapAreas = makeUserDefinedSnapAreas;

@@ -1,10 +1,9 @@
 import { Effect } from "effect";
 
-import {
-  makeNativeUiApplicationLayer,
-  NativeUiApplication,
-} from "../desktop/src/application";
-import { makeStdioTransport, serveNativeUiIpc } from "../desktop/src/ipc";
+import { makeNativeUiApplicationLayer } from "../desktop/src/application/composition";
+import { NativeUiApplication } from "../desktop/src/application/native-ui";
+import { serveNativeUiIpc } from "../desktop/src/ipc/server";
+import { makeStdioTransport } from "../desktop/src/ipc/transport";
 import {
   parseDesktopPlatform,
   resolveDesktopPaths,
@@ -26,10 +25,12 @@ const run = async (): Promise<void> => {
 };
 
 if (import.meta.main) {
-  run().catch((error: unknown) => {
+  try {
+    await run();
+  } catch (error) {
     const message =
       error instanceof Error ? error.message : "Backend IPC failed";
     process.stderr.write(`${message}\n`);
     process.exitCode = 1;
-  });
+  }
 }
