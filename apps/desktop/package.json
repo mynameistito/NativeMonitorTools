@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@native-monitor-tools/desktop",
+  "private": true,
+  "type": "module",
+  "module": "src/index.ts",
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --passWithNoTests"
+  },
+  "dependencies": {
+    "@effect/platform-bun": "4.0.0-rc.111",
+    "@native-monitor-tools/core": "workspace:*",
+    "effect": "4.0.0-rc.111"
+  },
+  "devDependencies": {
+    "bun-types": "1.4.2"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "native-monitor-tools",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mynameistito/nativemonitortools"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --filter @native-monitor-tools/desktop dev",
+    "start": "bun run --filter @native-monitor-tools/desktop start",
+    "backend:build": "bun build --compile apps/desktop/src/index.ts --outfile dist/native-monitor-tools-backend.exe",
+    "ui:dev": "bun run scripts/native-ui-dev.ts",
+    "ui:check": "bun run scripts/native-sdk-cli.ts check apps/native-ui",
+    "ui:test": "bun run scripts/native-sdk-cli.ts test apps/native-ui",
+    "panel:backend:build": "bun run scripts/slint-panel.ts backend",
+    "panel:build": "bun run scripts/slint-panel.ts build",
+    "panel:dev": "bun run scripts/slint-panel.ts dev",
+    "panel:release": "bun run scripts/slint-panel.ts release",
+    "panel:test": "bun run scripts/cargo-msvc.ts test --manifest-path apps/slint-ui/Cargo.toml --target-dir dist/slint-panel",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "lint": "ultracite check",
+    "check": "ultracite check",
+    "fix": "ultracite fix",
+    "prepare": "lefthook install"
+  },
+  "devDependencies": {
+    "@effect/platform-bun": "4.0.0-rc.111",
+    "@effect/platform-node": "4.0.0-rc.111",
+    "@native-sdk/cli": "0.10.1",
+    "@scriptc/runtime": "0.0.36",
+    "@types/bun": "^1.4.2",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "effect": "4.0.0-rc.111",
+    "eslint-plugin-github": "6.1.2",
+    "eslint-plugin-sonarjs": "^4.2.0",
+    "lefthook": "^2.1.12",
+    "oxfmt": "^0.67.0",
+    "oxlint": "^1.82.0",
+    "oxlint-plugin-react-doctor": "^0.9.13",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "ultracite": "7.11.1",
+    "vitest": "^5.0.0"
+  }
+}

@@ -1,0 +1,618 @@
+import {
+  makeDisplayMode,
+  makeMonitorSnapshot,
+  makeMonitorTopology,
+  MonitorRuntime,
+  MonitorRuntimeLive,
+  parseMonitorId,
+} from "@native-monitor-tools/core";
+import type { DisplayProfile } from "@native-monitor-tools/core";
+import { Effect } from "effect";
+import { describe, expect, it } from "vitest";
+
+import { makeNativeUiApplication } from "../src/application/native-ui";
+import { handleIpcLine, parseIpcResponse, serveNativeUiIpc } from "../src/ipc";
+import type { IpcTransport } from "../src/ipc";
+import type {
+  BrightnessContrastCapabilities,
+  GammaRamp,
+  WindowsDisplay,
+  WindowsDisplayDiscovery,
+  WindowsDisplayPort,
+  WindowsPlatformOperation,
+  WindowsPlatformResult,
+} from "../src/platform/windows";
+import type {
+  WindowsWindowPort,
+  WindowsWindowResult,
+  WindowsWindowRect,
+} from "../src/platform/windows/window";
+import type { ProfileName } from "../src/storage/profile-name";
+import { ProfileNotFound } from "../src/storage/profile-not-found";
+import type { ProfileStoreApi } from "../src/storage/profile-store";
+
+const unsupported = <T>(
+  operation: WindowsPlatformOperation
+): WindowsPlatformResult<T> => ({
+  _tag: "Unsupported",
+  operation,
+  reason: "Not used by the IPC test fixture",
+});
+
+const failure = <T>(
+  operation: WindowsPlatformOperation
+): WindowsPlatformResult<T> => ({
+  _tag: "Error",
+  operation,
+  reason: "Native call failed in the IPC test fixture",
+});
+
+const noValue = (): void => {};
+const noWindowValue = (): undefined => {};
+
+const successfulVoid = (): WindowsPlatformResult<void> => ({
+  _tag: "Success",
+  value: noValue(),
+});
+
+const successfulWindowVoid = (): WindowsWindowResult<undefined> => ({
+  _tag: "Success",
+  value: noWindowValue(),
+});
+
+interface ColorWrites {
+  brightness: number | null;
+  contrast: number | null;
+  gamma: GammaRamp | null;
+}
+
+const makeFixture = (
+  colorSupported = false,
+  colorReadFailure: "gamma" | "external" | null = null,
+  windowPort?: WindowsWindowPort
+) => {
+  const monitorId = Effect.runSync(parseMonitorId("device:test-primary"));
+  const mode = Effect.runSync(
+    makeDisplayMode({ height: 1080, refreshRate: 60, width: 1920 })
+  );
+  const snapshot = Effect.runSync(
+    makeMonitorSnapshot({
+      bounds: { height: 1080, width: 1920, x: 0, y: 0 },
+      id: monitorId,
+      isPrimary: true,
+      mode,
+      name: "Primary",
+    })
+  );
+  const topology = Effect.runSync(makeMonitorTopology([snapshot]));
+  const display: WindowsDisplay = {
+    identity: {
+      deviceName: "\\\\.\\DISPLAY1",
+      source: "logical-device-name",
+    },
+    snapshot,
+  };
+  const discovery: WindowsDisplayDiscovery = {
+    displays: [display],
+    topology,
+  };
+  const profiles = new Map<
+    string,
+    { name: ProfileName; profile: DisplayProfile }
+  >();
+  const profileStore: ProfileStoreApi = {
+    get: (name) => {
+      const stored = profiles.get(name.toString());
+      return stored === undefined
+        ? Effect.fail(new ProfileNotFound({ name: name.toString() }))
+        : Effect.succeed(stored.profile);
+    },
+    list: () =>
+      Effect.succeed([...profiles.values()].map((stored) => stored.name)),
+    pathFor: (name) => `${name}.json`,
+    save: (name, profile) =>
+      Effect.sync(() => {
+        profiles.set(name.toString(), { name, profile });
+      }),
+  };
+  const writes: ColorWrites = { brightness: null, contrast: null, gamma: null };
+  const brightnessContrastResult =
+    (): WindowsPlatformResult<BrightnessContrastCapabilities> => {
+      if (colorReadFailure === "external") {
+        return failure("getBrightnessContrastCapabilities");
+      }
+      if (!colorSupported) {
+        return unsupported("getBrightnessContrastCapabilities");
+      }
+      return {
+        _tag: "Success",
+        value: {
+          brightness: {
+            _tag: "Supported",
+            current: 50,
+            maximum: 100,
+            minimum: 0,
+          },
+          contrast: {
+            _tag: "Supported",
+            current: 60,
+            maximum: 100,
+            minimum: 0,
+          },
+        },
+      };
+    };
+  const gammaResult = (): WindowsPlatformResult<GammaRamp> => {
+    if (colorReadFailure === "gamma") {
+      return failure("getGammaRamp");
+    }
+    if (!colorSupported) {
+      return unsupported("getGammaRamp");
+    }
+    return {
+      _tag: "Success",
+      value: {
+        blue: Array.from({ length: 256 }, () => 0),
+        green: Array.from({ length: 256 }, () => 0),
+        red: Array.from({ length: 256 }, () => 0),
+      },
+    };
+  };
+  const monitorPort: WindowsDisplayPort = {
+    applyDisplayPlan: () => Promise.resolve(unsupported("applyDisplayPlan")),
+    discover: () => Promise.resolve({ _tag: "Success", value: discovery }),
+    getBrightnessContrastCapabilities: () =>
+      Promise.resolve(brightnessContrastResult()),
+    getGammaRamp: () => Promise.resolve(gammaResult()),
+    setBrightness: (_monitorId, value) => {
+      writes.brightness = value;
+      return Promise.resolve(
+        colorSupported ? successfulVoid() : unsupported("setBrightness")
+      );
+    },
+    setContrast: (_monitorId, value) => {
+      writes.contrast = value;
+      return Promise.resolve(
+        colorSupported ? successfulVoid() : unsupported("setContrast")
+      );
+    },
+    setGammaRamp: (_monitorId, ramp) => {
+      writes.gamma = ramp;
+      return Promise.resolve(
+        colorSupported ? successfulVoid() : unsupported("setGammaRamp")
+      );
+    },
+  };
+  const runtime = Effect.runSync(
+    Effect.provide(MonitorRuntime, MonitorRuntimeLive)
+  );
+  const application = makeNativeUiApplication({
+    monitorPort,
+    platform: "win32",
+    profileStore,
+    runtime,
+    windowPort,
+  });
+  return { application, writes };
+};
+
+const transportFrom = (input: string, output: string[]): IpcTransport => ({
+  readChunks: async function* readChunks() {
+    yield input;
+  },
+  writeLine: (line) => {
+    output.push(line);
+    return Promise.resolve();
+  },
+});
+
+describe("Native SDK UI IPC", () => {
+  it("builds a safe uniform gamma ramp and routes physical level writes", async () => {
+    const { application, writes } = makeFixture(true);
+    const gamma = JSON.parse(
+      await handleIpcLine(
+        JSON.stringify({
+          id: "gamma",
+          method: "color.set",
+          params: {
+            control: "gamma",
+            monitorId: "  device:test-primary  ",
+            value: 2,
+          },
+          version: 1,
+        }),
+        application
+      )
+    );
+    const brightness = JSON.parse(
+      await handleIpcLine(
+        JSON.stringify({
+          id: "brightness",
+          method: "color.set",
+          params: {
+            control: "brightness",
+            monitorId: "device:test-primary",
+            value: 80,
+          },
+          version: 1,
+        }),
+        application
+      )
+    );
+    const contrast = JSON.parse(
+      await handleIpcLine(
+        JSON.stringify({
+          id: "contrast",
+          method: "color.set",
+          params: {
+            control: "contrast",
+            monitorId: "device:test-primary",
+            value: 70,
+          },
+          version: 1,
+        }),
+        application
+      )
+    );
+
+    expect(gamma.ok).toBe(true);
+    expect(writes.gamma?.red).toHaveLength(256);
+    expect(writes.gamma?.red[1]).toBeGreaterThan(writes.gamma?.red[0] ?? 0);
+    expect(brightness.ok).toBe(true);
+    expect(writes.brightness).toBe(80);
+    expect(contrast.ok).toBe(true);
+    expect(writes.contrast).toBe(70);
+  });
+
+  it("reports color availability from usable per-monitor controls", async () => {
+    const unsupportedFixture = makeFixture();
+    expect(
+      unsupportedFixture.application.capabilitySnapshot().capabilities.color
+    ).toMatchObject({ available: false });
+    await Effect.runPromise(unsupportedFixture.application.listColor());
+    expect(
+      unsupportedFixture.application.capabilitySnapshot().capabilities.color
+    ).toMatchObject({
+      available: false,
+      reason:
+        "No usable color controls were reported by the connected monitors",
+    });
+
+    const supportedFixture = makeFixture(true);
+    await Effect.runPromise(supportedFixture.application.listColor());
+    expect(
+      supportedFixture.application.capabilitySnapshot().capabilities.color
+    ).toEqual({ available: true });
+  });
+
+  it("rejects window-area listing when the window port is unavailable", async () => {
+    const { application } = makeFixture();
+    const error = await Effect.runPromise(
+      Effect.flip(application.listWindowAreas())
+    );
+
+    expect(application.capabilitySnapshot().capabilities.windowTools).toEqual({
+      available: false,
+      reason: "The Windows foreground-window port is unavailable",
+    });
+    expect(error).toMatchObject({
+      _tag: "NativeUiAdapterError",
+      kind: "unsupported",
+      operation: "getForegroundWindow",
+      reason: "The Windows foreground-window port is unavailable",
+    });
+  });
+
+  it("preserves platform errors while reading gamma state", async () => {
+    const { application } = makeFixture(true, "gamma");
+    const error = await Effect.runPromise(Effect.flip(application.listColor()));
+
+    expect(error).toMatchObject({
+      _tag: "NativeUiAdapterError",
+      kind: "error",
+      operation: "getGammaRamp",
+    });
+  });
+
+  it("preserves platform errors while reading physical color state", async () => {
+    const { application } = makeFixture(true, "external");
+    const error = await Effect.runPromise(Effect.flip(application.listColor()));
+
+    expect(error).toMatchObject({
+      _tag: "NativeUiAdapterError",
+      kind: "error",
+      operation: "getBrightnessContrastCapabilities",
+    });
+  });
+
+  it("serves capabilities, monitor discovery, and profile operations over JSON lines", async () => {
+    const { application } = makeFixture();
+    const output: string[] = [];
+    const requests = [
+      { id: "capabilities", method: "capabilities.get", version: 1 },
+      { id: "monitors", method: "monitors.list", version: 1 },
+      { id: "colors", method: "color.list", version: 1 },
+      {
+        id: "save",
+        method: "profiles.save",
+        params: { name: "desk" },
+        version: 1,
+      },
+      { id: "list", method: "profiles.list", version: 1 },
+      {
+        id: "show",
+        method: "profiles.show",
+        params: { name: "desk" },
+        version: 1,
+      },
+      {
+        id: "diff",
+        method: "profiles.diff",
+        params: { name: "desk" },
+        version: 1,
+      },
+      {
+        id: "preview",
+        method: "profiles.applyPreview",
+        params: { name: "desk" },
+        version: 1,
+      },
+    ]
+      .map((request) => JSON.stringify(request))
+      .join("\n");
+
+    await serveNativeUiIpc(transportFrom(`${requests}\n`, output), application);
+
+    const responses = output.map((line) => JSON.parse(line));
+    expect(responses).toHaveLength(8);
+    expect(responses.map((response) => response.id)).toEqual([
+      "capabilities",
+      "monitors",
+      "colors",
+      "save",
+      "list",
+      "show",
+      "diff",
+      "preview",
+    ]);
+    expect(responses[0]?.result.capabilities.monitorDiscovery.available).toBe(
+      true
+    );
+    expect(responses[1]?.result.topology.monitors).toHaveLength(1);
+    expect(responses[2]?.result[0].gamma._tag).toBe("Unsupported");
+    expect(responses[2]?.result[0].brightness._tag).toBe("Unsupported");
+    expect(responses[3]?.result.saved).toBe(true);
+    expect(responses[4]?.result).toEqual(["desk"]);
+    expect(responses[5]?.result.profile).toEqual(responses[3]?.result.profile);
+    expect(responses[6]?.result.diff.isChanged).toBe(false);
+    expect(responses[7]?.result.plan.dryRun).toBe(true);
+  });
+
+  it("lists built-in window areas and snaps through the injected window port", async () => {
+    const writes: WindowsWindowRect[] = [];
+    const windowPort: WindowsWindowPort = {
+      getForegroundWindow: () =>
+        Promise.resolve({ _tag: "Success", value: 1n }),
+      getNormalWindowRect: () =>
+        Promise.resolve({
+          _tag: "Success",
+          value: { height: 300, width: 400, x: 20, y: 30 },
+        }),
+      setWindowPosition: (_window, rectangle) => {
+        writes.push(rectangle);
+        return Promise.resolve(successfulWindowVoid());
+      },
+    };
+    const { application } = makeFixture(false, null, windowPort);
+    const areas = JSON.parse(
+      await handleIpcLine(
+        JSON.stringify({
+          id: "areas",
+          method: "window.list",
+          version: 1,
+        }),
+        application
+      )
+    );
+    const snap = JSON.parse(
+      await handleIpcLine(
+        JSON.stringify({
+          id: "snap",
+          method: "window.snap",
+          params: {
+            areaId: "Full",
+            monitorId: "device:test-primary",
+          },
+          version: 1,
+        }),
+        application
+      )
+    );
+
+    expect(areas.ok).toBe(true);
+    expect(areas.result).toHaveLength(9);
+    expect(areas.result[4]).toMatchObject({
+      areaId: "Full",
+      monitorId: "device:test-primary",
+      monitorName: "Primary",
+    });
+    expect(snap).toMatchObject({
+      id: "snap",
+      ok: true,
+      result: { areaId: "Full", monitorId: "device:test-primary" },
+    });
+    expect(writes).toEqual([{ height: 1080, width: 1920, x: 0, y: 0 }]);
+  });
+
+  it("rejects a changed foreground window before calling the injected mutation", async () => {
+    const foregroundWindows = [1n, 2n];
+    let setCalls = 0;
+    const windowPort: WindowsWindowPort = {
+      getForegroundWindow: () =>
+        Promise.resolve({
+          _tag: "Success",
+          value: foregroundWindows.shift() ?? 2n,
+        }),
+      getNormalWindowRect: () =>
+        Promise.resolve({
+          _tag: "Success",
+          value: { height: 300, width: 400, x: 20, y: 30 },
+        }),
+      setWindowPosition: () => {
+        setCalls += 1;
+        return Promise.resolve(successfulWindowVoid());
+      },
+    };
+    const { application } = makeFixture(false, null, windowPort);
+    const response = JSON.parse(
+      await handleIpcLine(
+        JSON.stringify({
+          id: "changed-window",
+          method: "window.snap",
+          params: {
+            areaId: "Full",
+            monitorId: "device:test-primary",
+          },
+          version: 1,
+        }),
+        application
+      )
+    );
+
+    expect(response).toMatchObject({
+      error: {
+        code: "BACKEND_ERROR",
+        details: { kind: "error", operation: "setWindowPosition" },
+        message:
+          "The foreground window changed before the snap could be applied",
+      },
+      id: "changed-window",
+      ok: false,
+      version: 1,
+    });
+    expect(setCalls).toBe(0);
+  });
+
+  it("returns typed validation errors and never accepts a request without an id", async () => {
+    const { application } = makeFixture();
+    const missingId = JSON.parse(
+      await handleIpcLine(
+        JSON.stringify({ method: "capabilities.get", version: 1 }),
+        application
+      )
+    );
+    const unknownMethod = JSON.parse(
+      await handleIpcLine(
+        JSON.stringify({ id: "unknown", method: "eval", version: 1 }),
+        application
+      )
+    );
+    const invalidProfile = JSON.parse(
+      await handleIpcLine(
+        JSON.stringify({
+          id: "invalid-profile",
+          method: "profiles.save",
+          params: {
+            name: "desk",
+            profile: { code: "not executable content" },
+          },
+          version: 1,
+        }),
+        application
+      )
+    );
+    const invalidColor = JSON.parse(
+      await handleIpcLine(
+        JSON.stringify({
+          id: "invalid-color",
+          method: "color.set",
+          params: {
+            control: "gamma",
+            monitorId: "device:test-primary",
+            value: 9,
+          },
+          version: 1,
+        }),
+        application
+      )
+    );
+    const unsupportedColor = JSON.parse(
+      await handleIpcLine(
+        JSON.stringify({
+          id: "unsupported-color",
+          method: "color.set",
+          params: {
+            control: "brightness",
+            monitorId: "device:test-primary",
+            value: 50,
+          },
+          version: 1,
+        }),
+        application
+      )
+    );
+    const invalidWindow = JSON.parse(
+      await handleIpcLine(
+        JSON.stringify({
+          id: "invalid-window",
+          method: "window.snap",
+          params: { monitorId: "device:test-primary" },
+          version: 1,
+        }),
+        application
+      )
+    );
+
+    expect(missingId).toMatchObject({
+      error: { code: "INVALID_REQUEST" },
+      id: null,
+      ok: false,
+      version: 1,
+    });
+    expect(unknownMethod).toMatchObject({
+      error: { code: "UNKNOWN_METHOD" },
+      id: "unknown",
+      ok: false,
+    });
+    expect(invalidProfile).toMatchObject({
+      error: { code: "INVALID_PROFILE" },
+      id: "invalid-profile",
+      ok: false,
+    });
+    expect(invalidColor).toMatchObject({
+      error: { code: "INVALID_PARAMS" },
+      id: "invalid-color",
+      ok: false,
+    });
+    expect(unsupportedColor).toMatchObject({
+      error: { code: "CAPABILITY_UNAVAILABLE" },
+      id: "unsupported-color",
+      ok: false,
+    });
+    expect(invalidWindow).toMatchObject({
+      error: { code: "INVALID_PARAMS" },
+      id: "invalid-window",
+      ok: false,
+    });
+  });
+
+  it("converts an oversized line into a typed transport error response", async () => {
+    const { application } = makeFixture();
+    const output: string[] = [];
+    await serveNativeUiIpc(
+      transportFrom("x".repeat(400), output),
+      application,
+      { maxMessageBytes: 256 }
+    );
+
+    const response = parseIpcResponse(output[0] ?? "");
+    expect(response._tag).toBe("Success");
+    if (response._tag === "Success") {
+      expect(response.value).toMatchObject({
+        error: { code: "MESSAGE_TOO_LARGE" },
+        id: null,
+        ok: false,
+      });
+    }
+  });
+});

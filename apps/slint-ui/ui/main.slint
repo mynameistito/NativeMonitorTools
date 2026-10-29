@@ -1,0 +1,1099 @@
+import { Button, LineEdit, ScrollView, Slider } from "std-widgets.slint";
+
+export struct MonitorCard {
+    monitor_id: string,
+    display_name: string,
+    resolution: string,
+    position: string,
+    primary: bool,
+    gamma_supported: bool,
+    brightness_supported: bool,
+    contrast_supported: bool,
+    capability_note: string,
+}
+
+export struct ColorCard {
+    monitor_id: string,
+    display_name: string,
+    gamma_supported: bool,
+    gamma_value: float,
+    gamma_readback: string,
+    brightness_supported: bool,
+    brightness_minimum: float,
+    brightness_maximum: float,
+    brightness_value: float,
+    brightness_readback: string,
+    contrast_supported: bool,
+    contrast_minimum: float,
+    contrast_maximum: float,
+    contrast_value: float,
+    contrast_readback: string,
+    pending_control: string,
+}
+
+export struct ProfileItem {
+    name: string,
+    selected: bool,
+}
+
+export struct WindowArea {
+    area_id: string,
+    monitor_id: string,
+    monitor_name: string,
+    name: string,
+    selected: bool,
+}
+
+export struct PreviewOperation {
+    kind: string,
+    monitor_id: string,
+    detail: string,
+}
+
+component CapabilityBadge inherits Rectangle {
+    in property <string> label;
+    in property <bool> supported;
+
+    height: 22px;
+    min-width: 74px;
+    background: root.supported ? #153936 : #202d43;
+    border-color: root.supported ? #2e887d : #334764;
+    border-width: 1px;
+    border-radius: 6px;
+
+    Text {
+        text: root.label + (root.supported ? "  ✓" : "  —");
+        color: root.supported ? #9ce9df : #8a9ab5;
+        font-size: 10px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component SectionHeader inherits Rectangle {
+    in property <string> eyebrow;
+    in property <string> heading;
+    in property <string> status;
+    in property <string> action-label: "Retry";
+    in property <bool> action-enabled: true;
+    in property <bool> loading: false;
+    callback action-clicked();
+
+    height: 58px;
+
+    HorizontalLayout {
+        spacing: 12px;
+
+        VerticalLayout {
+            spacing: 3px;
+            Text {
+                text: root.eyebrow;
+                color: #6f8db8;
+                font-size: 10px;
+                font-weight: 800;
+            }
+            Text {
+                text: root.heading;
+                color: #f1f6ff;
+                font-size: 19px;
+                font-weight: 750;
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        Text {
+            text: root.status;
+            color: #91a8c9;
+            font-size: 11px;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            overflow: elide;
+        }
+        Button {
+            text: root.loading ? "Reading…" : root.action-label;
+            enabled: root.action-enabled && !root.loading;
+            clicked => { root.action-clicked(); }
+        }
+    }
+}
+
+component SectionMessage inherits Rectangle {
+    in property <string> message;
+    in property <bool> error: false;
+    in property <bool> empty: false;
+
+    min-height: 76px;
+    background: root.error ? #2d1e2a : #142238;
+    border-color: root.error ? #8f4d66 : #253c5d;
+    border-width: 1px;
+    border-radius: 9px;
+
+    HorizontalLayout {
+        padding: 14px;
+        spacing: 10px;
+        Text {
+            text: root.error ? "!" : "·";
+            color: root.error ? #ff9faf : #65d1c4;
+            font-size: 18px;
+            font-weight: 800;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.message;
+            color: root.error ? #ffd9e0 : #afc3df;
+            font-size: 12px;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+component MonitorCardView inherits Rectangle {
+    in property <MonitorCard> monitor;
+
+    min-height: 130px;
+    background: #17263d;
+    border-color: #294263;
+    border-width: 1px;
+    border-radius: 10px;
+
+    VerticalLayout {
+        padding: 13px;
+        spacing: 8px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.monitor.display_name;
+                color: #eef5ff;
+                font-size: 15px;
+                font-weight: 700;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            if root.monitor.primary: Rectangle {
+                height: 22px;
+                width: 76px;
+                background: #193f3b;
+                border-radius: 6px;
+                Text {
+                    text: "PRIMARY";
+                    color: #9ce9df;
+                    font-size: 9px;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        Text {
+            text: root.monitor.resolution;
+            color: #c9d8ed;
+            font-size: 12px;
+        }
+        Text {
+            text: root.monitor.position;
+            color: #8ea5c7;
+            font-size: 11px;
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            CapabilityBadge { label: "Gamma"; supported: root.monitor.gamma_supported; }
+            CapabilityBadge { label: "Bright"; supported: root.monitor.brightness_supported; }
+            CapabilityBadge { label: "Contrast"; supported: root.monitor.contrast_supported; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Text {
+            text: root.monitor.capability_note;
+            color: #7186a8;
+            font-size: 10px;
+            overflow: elide;
+        }
+    }
+}
+
+component MonitorPanel inherits Rectangle {
+    in property <[MonitorCard]> cards;
+    in property <string> status;
+    in property <bool> loading;
+    in property <bool> error;
+    in property <bool> empty;
+    in property <string> error-message;
+    callback retry-clicked();
+
+    background: #101a2b;
+    border-color: #263b5b;
+    border-width: 1px;
+    border-radius: 13px;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        SectionHeader {
+            eyebrow: "DISCOVERY";
+            heading: "Monitors";
+            status: root.status;
+            loading: root.loading;
+            action-clicked => { root.retry-clicked(); }
+        }
+        Rectangle { height: 1px; background: #20324e; }
+        if root.loading: SectionMessage { message: "Reading the current display topology…"; }
+        if root.error: SectionMessage { message: root.error-message; error: true; }
+        if root.empty && !root.loading && !root.error: SectionMessage { message: "No monitors were reported by the backend."; empty: true; }
+        if !root.loading && !root.error && !root.empty: ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: 8px;
+                for card in root.cards: MonitorCardView { monitor: card; }
+            }
+        }
+    }
+}
+
+component ProfileItemView inherits Rectangle {
+    in property <ProfileItem> item;
+    in property <bool> selection-enabled: true;
+    in property <bool> preview-enabled;
+    callback selected-clicked();
+    callback preview-clicked();
+
+    min-height: 46px;
+    background: root.item.selected ? #1c3b4a : #17263d;
+    border-color: root.item.selected ? #3e918a : #294263;
+    border-width: 1px;
+    border-radius: 8px;
+
+    HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 8px;
+        spacing: 8px;
+        Button {
+            text: root.item.selected ? "Selected  ·  " + root.item.name : root.item.name;
+            enabled: root.selection-enabled;
+            horizontal-stretch: 1;
+            clicked => { root.selected-clicked(); }
+        }
+        Button {
+            text: "Preview plan";
+            enabled: root.preview-enabled;
+            clicked => { root.preview-clicked(); }
+        }
+    }
+}
+
+component PreviewOperationView inherits Rectangle {
+    in property <PreviewOperation> operation;
+
+    min-height: 43px;
+    background: #14243a;
+    border-radius: 7px;
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        Text {
+            text: root.operation.kind;
+            color: #98e5dc;
+            font-size: 11px;
+            font-weight: 700;
+            width: 100px;
+            vertical-alignment: center;
+        }
+        VerticalLayout {
+            spacing: 2px;
+            vertical-stretch: 1;
+            Text {
+                text: root.operation.monitor_id;
+                color: #c8d7ed;
+                font-size: 11px;
+                overflow: elide;
+            }
+            Text {
+                text: root.operation.detail;
+                color: #8298b9;
+                font-size: 10px;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+component ProfilePanel inherits Rectangle {
+    in property <[ProfileItem]> items;
+    in property <string> status;
+    in property <bool> loading;
+    in property <bool> error;
+    in property <bool> empty;
+    in property <string> error-message;
+    in property <bool> preview-enabled;
+    in property <bool> preview-loading;
+    in property <string> preview-status;
+    in property <string> preview-error;
+    in property <bool> preview-has-result;
+    in property <string> preview-name;
+    in property <bool> preview-dry-run;
+    in property <bool> preview-noop;
+    in property <int> preview-operation-count;
+    in property <[PreviewOperation]> preview-operations;
+    in-out property <string> save-name: "";
+    in property <bool> save-loading;
+    in property <string> save-status;
+    in property <string> save-error;
+    in property <bool> save-success;
+    callback retry-clicked();
+    callback profile-selected(string);
+    callback profile-preview-clicked(string);
+    callback profile-save-name-edited(string);
+    callback profile-save-requested(string);
+
+    background: #101a2b;
+    border-color: #263b5b;
+    border-width: 1px;
+    border-radius: 13px;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        SectionHeader {
+            eyebrow: "SAFE PLANS";
+            heading: "Saved profiles";
+            status: root.status;
+            loading: root.loading;
+            action-clicked => { root.retry-clicked(); }
+        }
+        Rectangle { height: 1px; background: #20324e; }
+        Rectangle {
+            min-height: 157px;
+            background: #0d1727;
+            border-color: root.save-error != "" ? #8f4d66 : #233957;
+            border-width: 1px;
+            border-radius: 9px;
+            VerticalLayout {
+                padding: 11px;
+                spacing: 6px;
+                Text {
+                    text: "SAVE CURRENT LAYOUT";
+                    color: #6f8db8;
+                    font-size: 9px;
+                    font-weight: 800;
+                }
+                Text {
+                    text: "Writes one profile file only  ·  display settings are never applied";
+                    color: #859bbd;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    save-name-input := LineEdit {
+                        text <=> root.save-name;
+                        placeholder-text: "Profile name  ·  e.g. desk-work";
+                        enabled: !root.save-loading;
+                        horizontal-stretch: 1;
+                        edited(text) => { root.profile-save-name-edited(text); }
+                        accepted => { root.profile-save-requested(save-name-input.text); }
+                    }
+                    Button {
+                        text: root.save-loading ? "Saving…" : "Save profile";
+                        enabled: !root.save-loading && root.save-name != "";
+                        clicked => { root.profile-save-requested(save-name-input.text); }
+                    }
+                }
+                if root.save-error != "": Text {
+                    text: "!  " + root.save-error;
+                    color: #ffb0bd;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                }
+                if root.save-error == "": Text {
+                    text: root.save-status;
+                    color: root.save-success ? #9ce9df : (root.save-loading ? #f0cc82 : #91a8c9);
+                    font-size: 10px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        if root.loading: SectionMessage { message: "Reading saved profile names…"; }
+        if root.error: SectionMessage { message: root.error-message; error: true; }
+        if root.empty && !root.loading && !root.error: SectionMessage { message: "No saved profiles are available to preview."; empty: true; }
+        if !root.loading && !root.error && !root.empty: ScrollView {
+            height: 116px;
+            VerticalLayout {
+                spacing: 7px;
+                for item in root.items: ProfileItemView {
+                    item: item;
+                    selection-enabled: !root.preview-loading;
+                    preview-enabled: root.preview-enabled && !root.preview-loading;
+                    selected-clicked => { root.profile-selected(item.name); }
+                    preview-clicked => { root.profile-preview-clicked(item.name); }
+                }
+            }
+        }
+        Rectangle {
+            min-height: 122px;
+            background: #0d1727;
+            border-color: #233957;
+            border-width: 1px;
+            border-radius: 9px;
+            VerticalLayout {
+                padding: 11px;
+                spacing: 6px;
+                Text {
+                    text: "PREVIEW RESULT";
+                    color: #6f8db8;
+                    font-size: 9px;
+                    font-weight: 800;
+                }
+                if root.preview-loading: Text {
+                    text: "Validating profile plan…";
+                    color: #e6c780;
+                    font-size: 12px;
+                }
+                if !root.preview-loading && root.preview-error != "": Text {
+                    text: root.preview-error;
+                    color: #ffb0bd;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+                if !root.preview-loading && root.preview-error == "" && !root.preview-has-result: Text {
+                    text: root.preview-status == "" ? "Select a profile, then preview its dry-run plan." : root.preview-status;
+                    color: #859bbd;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+                if root.preview-has-result && !root.preview-loading: VerticalLayout {
+                    spacing: 4px;
+                    Text {
+                        text: "Selected  ·  " + root.preview-name;
+                        color: #dce9fb;
+                        font-size: 12px;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: (root.preview-dry-run ? "DRY RUN CONFIRMED" : "UNSAFE PLAN") + "  ·  " + root.preview-operation-count + " operation(s)" + (root.preview-noop ? "  ·  NO-OP" : "");
+                        color: root.preview-dry-run ? #9ce9df : #ffb0bd;
+                        font-size: 11px;
+                        font-weight: 700;
+                    }
+                    if root.preview-noop: Text {
+                        text: "Current topology already matches this profile.";
+                        color: #879dbe;
+                        font-size: 10px;
+                    }
+                    if !root.preview-noop: ScrollView {
+                        height: 66px;
+                        VerticalLayout {
+                            spacing: 5px;
+                            for operation in root.preview-operations: PreviewOperationView { operation: operation; }
+                        }
+                    }
+                }
+            }
+        }
+        Text {
+            text: "Preview only  ·  computes a validated dry-run plan and never applies display changes.";
+            color: #8094b5;
+            font-size: 10px;
+            wrap: word-wrap;
+        }
+    }
+}
+
+component ColorControlRow inherits Rectangle {
+    in property <string> label;
+    in property <string> control;
+    in property <bool> supported;
+    in property <float> minimum;
+    in property <float> maximum;
+    in property <float> value;
+    in property <string> bounds-label;
+    in property <string> readback;
+    in property <string> pending-control;
+    callback set-requested(string, float);
+
+    min-height: 69px;
+    background: #14243a;
+    border-radius: 8px;
+
+    if root.supported: VerticalLayout {
+        padding: 9px;
+        spacing: 5px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.label;
+                color: #e5eefc;
+                font-size: 11px;
+                font-weight: 700;
+                width: 76px;
+            }
+            Text {
+                text: root.bounds-label;
+                color: #8198bb;
+                font-size: 10px;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.pending-control == root.control ? "Pending…" : root.readback;
+                color: root.pending-control == root.control ? #f0cc82 : #91d8cf;
+                font-size: 10px;
+                horizontal-alignment: right;
+                overflow: elide;
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            control_slider := Slider {
+                minimum: root.minimum;
+                maximum: root.maximum;
+                value: root.value;
+                step: root.control == "gamma" ? 0.1 : 1;
+                enabled: root.pending-control == "";
+                horizontal-stretch: 1;
+            }
+            Button {
+                text: "Set";
+                enabled: root.pending-control == "";
+                clicked => { root.set-requested(root.control, control_slider.value); }
+            }
+        }
+    }
+    if !root.supported: HorizontalLayout {
+        padding: 10px;
+        spacing: 8px;
+        Text {
+            text: root.label;
+            color: #899bb7;
+            font-size: 11px;
+            font-weight: 700;
+            width: 76px;
+        }
+        Text {
+            text: root.readback;
+            color: #7286a5;
+            font-size: 10px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+component ColorMonitorCard inherits Rectangle {
+    in property <ColorCard> color-card;
+    callback set-requested(string, string, float);
+
+    min-height: 248px;
+    background: #17263d;
+    border-color: #294263;
+    border-width: 1px;
+    border-radius: 10px;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 7px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.color-card.display_name;
+                color: #eef5ff;
+                font-size: 14px;
+                font-weight: 700;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.color-card.pending_control == "" ? "READY" : "PENDING";
+                color: root.color-card.pending_control == "" ? #75d7ca : #efca7d;
+                font-size: 9px;
+                font-weight: 800;
+                vertical-alignment: center;
+            }
+        }
+        Text {
+            text: root.color-card.monitor_id;
+            color: #7187a8;
+            font-size: 10px;
+            overflow: elide;
+        }
+        ColorControlRow {
+            label: "Gamma";
+            control: "gamma";
+            supported: root.color-card.gamma_supported;
+            minimum: 0.3;
+            maximum: 4.4;
+            value: root.color-card.gamma_value;
+            bounds-label: "Bounds  ·  0.3–4.4";
+            readback: root.color-card.gamma_readback;
+            pending-control: root.color-card.pending_control;
+            set-requested(control, value) => { root.set-requested(root.color-card.monitor_id, control, value); }
+        }
+        ColorControlRow {
+            label: "Brightness";
+            control: "brightness";
+            supported: root.color-card.brightness_supported;
+            minimum: root.color-card.brightness_minimum;
+            maximum: root.color-card.brightness_maximum;
+            value: root.color-card.brightness_value;
+            bounds-label: "Bounds  ·  " + root.color-card.brightness_minimum + "–" + root.color-card.brightness_maximum;
+            readback: root.color-card.brightness_readback;
+            pending-control: root.color-card.pending_control;
+            set-requested(control, value) => { root.set-requested(root.color-card.monitor_id, control, value); }
+        }
+        ColorControlRow {
+            label: "Contrast";
+            control: "contrast";
+            supported: root.color-card.contrast_supported;
+            minimum: root.color-card.contrast_minimum;
+            maximum: root.color-card.contrast_maximum;
+            value: root.color-card.contrast_value;
+            bounds-label: "Bounds  ·  " + root.color-card.contrast_minimum + "–" + root.color-card.contrast_maximum;
+            readback: root.color-card.contrast_readback;
+            pending-control: root.color-card.pending_control;
+            set-requested(control, value) => { root.set-requested(root.color-card.monitor_id, control, value); }
+        }
+    }
+}
+
+component ColorPanel inherits Rectangle {
+    in property <[ColorCard]> cards;
+    in property <string> status;
+    in property <bool> loading;
+    in property <bool> error;
+    in property <bool> empty;
+    in property <string> error-message;
+    in property <bool> action-enabled;
+    callback retry-clicked();
+    callback set-requested(string, string, float);
+
+    background: #101a2b;
+    border-color: #263b5b;
+    border-width: 1px;
+    border-radius: 13px;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        SectionHeader {
+            eyebrow: "DISPLAY CONTROLS";
+            heading: "Color controls";
+            status: root.status;
+            loading: root.loading;
+            action-enabled: root.action-enabled;
+            action-label: "Read controls";
+            action-clicked => { root.retry-clicked(); }
+        }
+        Rectangle { height: 1px; background: #20324e; }
+        if root.loading: SectionMessage { message: "Reading gamma, brightness, and contrast capabilities…"; }
+        if root.error: SectionMessage { message: root.error-message; error: true; }
+        if root.empty && !root.loading && !root.error: SectionMessage { message: "No color state was reported by the backend."; empty: true; }
+        if !root.loading && !root.error && !root.empty: ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: 8px;
+                for color-card in root.cards: ColorMonitorCard {
+                    color-card: color-card;
+                    set-requested(monitor-id, control, value) => { root.set-requested(monitor-id, control, value); }
+                }
+            }
+        }
+    }
+}
+
+component WindowAreaView inherits Rectangle {
+    in property <WindowArea> area;
+    in property <bool> action-enabled;
+    callback selected-clicked(string, string);
+
+    min-height: 51px;
+    background: root.area.selected ? #1c3b4a : #17263d;
+    border-color: root.area.selected ? #3e918a : #294263;
+    border-width: 1px;
+    border-radius: 8px;
+
+    Button {
+        text: (root.area.selected ? "✓  " : "○  ") + root.area.name + "  ·  " + root.area.monitor_name;
+        enabled: root.action-enabled;
+        width: 100%;
+        clicked => { root.selected-clicked(root.area.area_id, root.area.monitor_id); }
+    }
+}
+
+component WindowPanel inherits Rectangle {
+    in property <[WindowArea]> areas;
+    in property <string> status;
+    in property <bool> loading;
+    in property <bool> error;
+    in property <bool> empty;
+    in property <string> error-message;
+    in property <bool> action-enabled;
+    in property <bool> snap-enabled;
+    in property <bool> snap-pending;
+    in property <string> selected-area;
+    in property <string> selected-monitor;
+    callback retry-clicked();
+    callback area-selected(string, string);
+    callback snap-clicked();
+
+    background: #101a2b;
+    border-color: #263b5b;
+    border-width: 1px;
+    border-radius: 13px;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        SectionHeader {
+            eyebrow: "FOREGROUND WINDOW";
+            heading: "Snap areas";
+            status: root.status;
+            loading: root.loading;
+            action-enabled: root.action-enabled;
+            action-label: "Read areas";
+            action-clicked => { root.retry-clicked(); }
+        }
+        Rectangle {
+            min-height: 47px;
+            background: #3a2b1d;
+            border-color: #76532c;
+            border-width: 1px;
+            border-radius: 8px;
+            HorizontalLayout {
+                padding: 10px;
+                spacing: 8px;
+                Text {
+                    text: "!";
+                    color: #f0c777;
+                    font-size: 16px;
+                    font-weight: 800;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "WARNING  ·  Snap moves the current foreground window immediately. Verify the selected area before continuing.";
+                    color: #e9c98d;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+        Rectangle { height: 1px; background: #20324e; }
+        if root.loading: SectionMessage { message: "Reading structured monitor snap areas…"; }
+        if root.error: SectionMessage { message: root.error-message; error: true; }
+        if root.empty && !root.loading && !root.error: SectionMessage { message: "No snap areas were reported by the backend."; empty: true; }
+        if !root.loading && !root.error && !root.empty: ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: 7px;
+                for area in root.areas: WindowAreaView {
+                    area: area;
+                    action-enabled: root.action-enabled && !root.snap-pending;
+                    selected-clicked(area-id, monitor-id) => { root.area-selected(area-id, monitor-id); }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            Text {
+                text: root.selected-area == "" ? "No area selected" : "Selected  ·  " + root.selected-area;
+                color: #9bb0cf;
+                font-size: 11px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            Button {
+                text: root.snap-pending ? "Snapping…" : "Snap foreground window";
+                enabled: root.snap-enabled && !root.loading && !root.snap-pending && root.selected-area != "" && root.selected-monitor != "";
+                clicked => { root.snap-clicked(); }
+            }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Native Monitor Tools";
+    width: 1240px;
+    height: 900px;
+    background: #0a111d;
+
+    in property <string> connection-status: "Connecting to backend";
+    in property <string> monitor-status: "Waiting for discovery";
+    in property <string> profile-status: "Waiting for profiles";
+    in property <string> color-status: "Waiting for color state";
+    in property <string> window-status: "Waiting for snap areas";
+    in property <string> error-message: "";
+    in property <[MonitorCard]> monitor-cards: [];
+    in property <[ProfileItem]> profile-items: [];
+    in property <[ColorCard]> color-cards: [];
+    in property <[WindowArea]> window-areas: [];
+    in property <[PreviewOperation]> profile-preview-operations: [];
+    in property <bool> loading: true;
+    in property <bool> has-error: false;
+
+    in property <bool> monitors-loading: true;
+    in property <bool> monitors-error: false;
+    in property <bool> monitors-empty: false;
+    in property <string> monitors-error-message: "";
+    in property <bool> profiles-loading: true;
+    in property <bool> profiles-error: false;
+    in property <bool> profiles-empty: false;
+    in property <string> profiles-error-message: "";
+    in property <bool> colors-loading: true;
+    in property <bool> colors-error: false;
+    in property <bool> colors-empty: false;
+    in property <string> colors-error-message: "";
+    in property <bool> windows-loading: true;
+    in property <bool> windows-error: false;
+    in property <bool> windows-empty: false;
+    in property <string> windows-error-message: "";
+
+    in property <bool> profile-preview-enabled: false;
+    in property <bool> color-action-enabled: true;
+    in property <bool> window-action-enabled: true;
+    in property <bool> window-snap-enabled: false;
+    in property <bool> window-snap-pending: false;
+    in property <string> selected-profile: "";
+    in property <string> selected-window-area: "";
+    in property <string> selected-window-monitor: "";
+    in-out property <string> profile-save-name: "";
+    in property <bool> profile-preview-loading: false;
+    in property <string> profile-preview-status: "";
+    in property <string> profile-preview-error: "";
+    in property <bool> profile-preview-has-result: false;
+    in property <string> profile-preview-name: "";
+    in property <bool> profile-preview-dry-run: false;
+    in property <bool> profile-preview-noop: false;
+    in property <int> profile-preview-operation-count: 0;
+    in property <bool> profile-save-loading: false;
+    in property <string> profile-save-status: "Save a snapshot of the current display layout";
+    in property <string> profile-save-error: "";
+    in property <bool> profile-save-success: false;
+
+    callback refresh-clicked();
+    callback monitor-retry-clicked();
+    callback profile-retry-clicked();
+    callback color-retry-clicked();
+    callback window-retry-clicked();
+    callback profile-selected(string);
+    callback profile-preview-clicked(string);
+    callback profile-save-name-edited(string);
+    callback profile-save-requested(string);
+    callback color-set-requested(string, string, float);
+    callback window-area-selected(string, string);
+    callback window-snap-clicked();
+
+    Rectangle {
+        background: root.background;
+        VerticalLayout {
+            padding: 25px;
+            spacing: 15px;
+
+            HorizontalLayout {
+                spacing: 14px;
+                Rectangle {
+                    width: 44px;
+                    height: 44px;
+                    background: #62d5c5;
+                    border-radius: 13px;
+                    Text {
+                        text: "N";
+                        color: #07131d;
+                        font-size: 24px;
+                        font-weight: 800;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                VerticalLayout {
+                    spacing: 2px;
+                    Text {
+                        text: "NATIVE MONITOR TOOLS";
+                        color: #f2f6fd;
+                        font-size: 22px;
+                        font-weight: 800;
+                    }
+                    Text {
+                        text: "Native control panel  /  inspect first, mutate explicitly";
+                        color: #8098bc;
+                        font-size: 12px;
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: root.loading ? "Refreshing…" : "Refresh all";
+                    enabled: !root.loading;
+                    clicked => { root.refresh-clicked(); }
+                }
+            }
+
+            Rectangle {
+                height: 38px;
+                background: root.has-error ? #321d2a : #122638;
+                border-color: root.has-error ? #b45b70 : #244c5e;
+                border-width: 1px;
+                border-radius: 9px;
+                HorizontalLayout {
+                    padding-left: 13px;
+                    padding-right: 13px;
+                    spacing: 8px;
+                    Text {
+                        text: root.has-error ? "!" : "●";
+                        color: root.has-error ? #ff9eae : #61d5c6;
+                        font-size: 14px;
+                        font-weight: 800;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.has-error ? root.error-message : root.connection-status;
+                        color: root.has-error ? #ffd5dd : #b8e8e3;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: root.loading ? "SYNC" : "READY";
+                        color: root.loading ? #e4c17d : #61d5c6;
+                        font-size: 10px;
+                        font-weight: 800;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: 14px;
+                    HorizontalLayout {
+                        spacing: 14px;
+                        vertical-stretch: 1;
+                        MonitorPanel {
+                            horizontal-stretch: 1;
+                            min-width: 420px;
+                            cards: root.monitor-cards;
+                            status: root.monitor-status;
+                            loading: root.monitors-loading;
+                            error: root.monitors-error;
+                            empty: root.monitors-empty;
+                            error-message: root.monitors-error-message;
+                            retry-clicked => { root.monitor-retry-clicked(); }
+                        }
+                        ProfilePanel {
+                            horizontal-stretch: 1;
+                            min-width: 420px;
+                            items: root.profile-items;
+                            status: root.profile-status;
+                            loading: root.profiles-loading;
+                            error: root.profiles-error;
+                            empty: root.profiles-empty;
+                            error-message: root.profiles-error-message;
+                            preview-enabled: root.profile-preview-enabled;
+                            preview-loading: root.profile-preview-loading;
+                            preview-status: root.profile-preview-status;
+                            preview-error: root.profile-preview-error;
+                            preview-has-result: root.profile-preview-has-result;
+                            preview-name: root.profile-preview-name;
+                            preview-dry-run: root.profile-preview-dry-run;
+                            preview-noop: root.profile-preview-noop;
+                            preview-operation-count: root.profile-preview-operation-count;
+                            preview-operations: root.profile-preview-operations;
+                            save-name <=> root.profile-save-name;
+                            save-loading: root.profile-save-loading;
+                            save-status: root.profile-save-status;
+                            save-error: root.profile-save-error;
+                            save-success: root.profile-save-success;
+                            retry-clicked => { root.profile-retry-clicked(); }
+                            profile-selected(name) => { root.profile-selected(name); }
+                            profile-preview-clicked(name) => { root.profile-preview-clicked(name); }
+                            profile-save-name-edited(name) => { root.profile-save-name-edited(name); }
+                            profile-save-requested(name) => { root.profile-save-requested(name); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 14px;
+                        vertical-stretch: 1;
+                        ColorPanel {
+                            horizontal-stretch: 1;
+                            min-width: 520px;
+                            cards: root.color-cards;
+                            status: root.color-status;
+                            loading: root.colors-loading;
+                            error: root.colors-error;
+                            empty: root.colors-empty;
+                            error-message: root.colors-error-message;
+                            action-enabled: root.color-action-enabled;
+                            retry-clicked => { root.color-retry-clicked(); }
+                            set-requested(monitor-id, control, value) => { root.color-set-requested(monitor-id, control, value); }
+                        }
+                        WindowPanel {
+                            horizontal-stretch: 1;
+                            min-width: 520px;
+                            areas: root.window-areas;
+                            status: root.window-status;
+                            loading: root.windows-loading;
+                            error: root.windows-error;
+                            empty: root.windows-empty;
+                            error-message: root.windows-error-message;
+                            action-enabled: root.window-action-enabled;
+                            snap-enabled: root.window-snap-enabled;
+                            snap-pending: root.window-snap-pending;
+                            selected-area: root.selected-window-area;
+                            selected-monitor: root.selected-window-monitor;
+                            retry-clicked => { root.window-retry-clicked(); }
+                            area-selected(area-id, monitor-id) => { root.window-area-selected(area-id, monitor-id); }
+                            snap-clicked => { root.window-snap-clicked(); }
+                        }
+                    }
+                    Rectangle {
+                        min-height: 35px;
+                        background: #101a2a;
+                        border-color: #1d3049;
+                        border-width: 1px;
+                        border-radius: 8px;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            Text {
+                                text: "Safety contract  ·  profiles are preview-only  ·  color writes and window snaps require explicit actions and backend readback";
+                                color: #8ea4c4;
+                                font-size: 10px;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component AppTray inherits SystemTrayIcon {
+    icon: @image-url("../assets/tray-icon.png");
+    tooltip: "Native Monitor Tools";
+    title: "Native Monitor Tools";
+
+    callback open-window();
+    callback refresh();
+    callback quit();
+
+    clicked => { root.open-window(); }
+
+    Menu {
+        MenuItem {
+            title: "Open panel";
+            activated => { root.open-window(); }
+        }
+        MenuItem {
+            title: "Refresh";
+            activated => { root.refresh(); }
+        }
+        MenuSeparator { }
+        MenuItem {
+            title: "Quit";
+            activated => { root.quit(); }
+        }
+    }
+}
